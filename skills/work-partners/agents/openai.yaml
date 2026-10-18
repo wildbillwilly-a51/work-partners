@@ -1,0 +1,4 @@
+interface:
+  display_name: "Work partners"
+  short_description: "Ask Claude or Codex for a bounded peer review"
+  default_prompt: "Use $work-partners to investigate this project with the other agent."

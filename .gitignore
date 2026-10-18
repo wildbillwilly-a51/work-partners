@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+build/
+dist/
+.env
+.env.*
+*.local.json
+*.local.md
+.DS_Store
+Thumbs.db

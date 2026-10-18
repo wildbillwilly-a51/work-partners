@@ -1,0 +1,21 @@
+Work partners
+Copyright (c) 2026 Walt Amason. All rights reserved.
+
+Work partners is source-available, not open source. It is a pre-release.
+
+- You may install and use it free of charge on your own computers.
+- You may not redistribute it, sell it, offer it to others as a service,
+  publish modified versions of it, or build other products from it,
+  without the author's written permission.
+- The terms of the site that hosts this repository may let you view it and
+  make a copy of it there (a fork); that gives you no other rights.
+- It is provided "as is", without warranty of any kind. The author is not
+  liable for any damage arising from its use.
+
+Consultations send the request, supplied discussion context, and source material
+read by the peer through your native Codex or Claude Code account. Provider
+processing follows that provider's account terms. Read-only tools may read
+untracked or ignored project files; read-only access does not redact secrets.
+Choose approved projects and context. Runner receipts stay on your computer;
+native CLIs can also keep their own local session transcripts. Do not publish
+those receipts, transcripts, sign-ins or other private state.
