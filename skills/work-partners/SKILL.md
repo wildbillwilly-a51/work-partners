@@ -73,9 +73,12 @@ IDs remain in the receipts for diagnosis. Up to four peer calls per task are
 allowed; stop when the question is resolved rather than filling the allowance.
 
 Start with the decision to resolve, relevant evidence, and your provisional
-view. Have the partner challenge unsupported assumptions. Continue on material
-disagreement, an unanswered question, or new evidence; follow-ups should supply
-only that change, since saved exchanges are already supplied. Do not repeat
+view. Quote the relevant owner success criteria, constraints and rejected
+approaches; distinguish them from your proposals. Ask the partner to flag
+recommendations that conflict with those criteria and challenge unsupported
+assumptions. Continue on material disagreement, an unanswered question, or new
+evidence; follow-ups should supply only that change, since saved exchanges are
+already supplied. Do not repeat
 settled arguments or seek agreement for its own sake. Finish at a supported
 recommendation, an explicit tradeoff, or a precise next test; report material
 unresolved disagreement rather than forcing consensus. This needs no extra
@@ -86,7 +89,7 @@ tracked bytes reuse current-policy completed receipts only when the checkout has
 no untracked files and the same requested model, effort, and native fallback
 selection. Changed settings require fresh inference. Untracked contents are not bulk-read; their presence disables
 cache reuse, and `cache_eligible` reports this on fresh results. Old cache entries
-are invalidated by cache policy 6; their receipts stay readable. Failed reviews
+are invalidated by cache policy 7; their receipts stay readable. Failed reviews
 still require explicit retry across model changes and policy upgrades. Ignored and untracked bytes are
 not certified by the before/after checks. A changed checkout creates a new
 operation and old reviews are identified as older evidence.
@@ -131,7 +134,16 @@ Use local source records for a source review. Live SSH, deployments, learning
 runs and other runtime actions remain the lead's separately authorized work.
 Partners do not inherit permission to perform them. Never run two writers.
 
-For implementation, ask for plan review, make the authorized change as lead,
-then request review of the resulting diff and validation. Resolve disagreements
-against evidence; report material unresolved questions. A peer's confidence or
-agreement is not validation.
+For implementation, complete plan review before editing, make the authorized
+change as lead, then request review of the resulting diff and validation.
+Supply the relevant diff hunks, base/head identifiers, necessary source snippets
+and test commands/results; Claude cannot run Git or tests with its file-reading
+tools. Narrow the question to fit the request/context limits. Full saved requests
+are replayed on follow-ups, so send only new relevant hunks and evidence.
+Keep the reviewed checkout stable until the peer returns; useful independent
+work can continue outside it. If code changes during review, inspect the changes
+and review the actual relevant delta as needed instead of repeating a stale plan.
+Resolve disagreements against evidence; report material unresolved questions.
+Distinguish peer-reviewed changes from later corrections verified only by the
+lead, without adding a review round solely for agreement. A peer's confidence
+or agreement is not validation.

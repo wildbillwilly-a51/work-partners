@@ -287,6 +287,50 @@ class Partners(unittest.TestCase):
         self.args.task = first["task_id"]
         self.assertFalse(p.ask(self.args, run=self.claude)["cached"])
 
+    def test_policy_six_success_runs_fresh_and_recaches_for_both_peers(self):
+        for lead, response in (("codex", self.claude), ("claude", self.codex)):
+            with self.subTest(lead=lead):
+                self.args.lead, self.args.task = lead, None
+                first = p.ask(self.args, run=response)
+                path = Path(first["receipt"])
+                record = json.loads(path.read_text())
+                old = record["operations"][0]
+                old["cache_version"] = 6
+                old["key"] = p.digest(json.dumps(
+                    [6, old["review_key"], old["requested_selection"]], sort_keys=True).encode())
+                p.save(path, record)
+                self.args.task = first["task_id"]
+                self.assertFalse(p.ask(self.args, run=response)["cached"])
+                upgraded = json.loads(path.read_text())
+                self.assertEqual(upgraded["operations"][0], old)
+                self.assertEqual(len(upgraded["operations"]), 2)
+                self.assertEqual(upgraded["operations"][1]["cache_version"], p.CACHE_VERSION)
+                self.assertTrue(p.ask(self.args, run=lambda *_: self.fail("Duplicate inference"))["cached"])
+
+    def test_policy_six_failure_keeps_retry_gate_for_both_peers(self):
+        def timeout(*_):
+            raise subprocess.TimeoutExpired("fixture", 30)
+        for lead, response in (("codex", self.claude), ("claude", self.codex)):
+            with self.subTest(lead=lead):
+                self.args.lead, self.args.task, self.args.retry = lead, None, False
+                before = set((self.root / "state").glob("*/task.json"))
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    p.ask(self.args, run=timeout)
+                path, = set((self.root / "state").glob("*/task.json")) - before
+                record = json.loads(path.read_text())
+                old = record["operations"][0]
+                old["cache_version"] = 6
+                old["key"] = p.digest(json.dumps(
+                    [6, old["review_key"], old["requested_selection"]], sort_keys=True).encode())
+                p.save(path, record)
+                self.args.task = record["task_id"]
+                with self.assertRaisesRegex(p.Refused, "--retry"):
+                    p.ask(self.args, run=lambda *_: self.fail("Old failure bypassed retry gate"))
+                self.assertEqual(json.loads(path.read_text()), record)
+                self.args.retry = True
+                self.assertFalse(p.ask(self.args, run=response)["cached"])
+                self.assertEqual(json.loads(path.read_text())["operations"][0], old)
+
     def test_selection_defaults_config_precedence_and_explicit_overrides(self):
         with patch.object(p, "configuration", return_value=({}, set())):
             for peer, model in p.DEFAULT_MODELS.items():

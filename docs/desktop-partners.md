@@ -16,8 +16,9 @@ python -B "$env:USERPROFILE/.a51/work-partners/partner.py" ask --lead codex --pr
 From Claude Code use `--lead claude`. On POSIX use Python 3.12+ (often `python3`)
 and `$HOME/.a51/work-partners/partner.py`. Run `--help` for all options.
 
-Supply the decision, relevant evidence and provisional view. The peer should
-challenge unsupported assumptions. Read its reply, question and evidence. Use
+Supply the decision, relevant evidence and provisional view. Quote relevant owner
+criteria, constraints and rejected approaches so the peer can flag conflicts
+with those goals and challenge unsupported assumptions. Read its reply, question and evidence. Use
 the same `--task <id>` to answer a question, introduce material new evidence or
 resolve disagreement. Saved completed exchanges accompany each fresh native
 session; this does not take over an existing desktop conversation.
@@ -27,6 +28,14 @@ Do not force consensus or fill a review-round quota. Each task permits at most
 four peer calls, and peers cannot launch nested partners. `status --task <id>`
 recovers private saved results. Large requests or accumulated discussion can hit
 the bounded context/time limits; keep questions focused.
+
+Complete plan review before editing. For change reviews, supply relevant diff
+hunks, base/head identifiers, necessary snippets and test commands/results;
+Claude's file-reading tools cannot run Git or tests. Keep the checkout stable
+during review and send only new relevant hunks on follow-ups, since saved
+requests are replayed in full. If code changes during review, inspect and review
+the relevant delta as needed. Distinguish peer-reviewed changes from later
+corrections verified only by the lead. Agreement alone is not validation.
 
 ## Models and boundaries
 
