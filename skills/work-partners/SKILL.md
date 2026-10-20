@@ -30,7 +30,10 @@ flags rather than weakening the peer command. See the source README for setup.
 ## Ask and follow up
 
 Resolve the actual project checkout, its instructions, the user's objective and
-existing changes. Give the peer a bounded question, relevant evidence and any
+existing changes. For implementation, complete plan review before editing.
+Ask the peer to challenge the design and its highest-impact failure paths,
+then make the authorized change as lead and request review of the resulting
+diff and validation. Give the peer a bounded question, relevant evidence and any
 directly necessary memory context; do not send secrets or private media.
 Write that request to a UTF-8 file outside the project. From PowerShell:
 
@@ -76,7 +79,11 @@ Start with the decision to resolve, relevant evidence, and your provisional
 view. Quote the relevant owner success criteria, constraints and rejected
 approaches; distinguish them from your proposals. Ask the partner to flag
 recommendations that conflict with those criteria and challenge unsupported
-assumptions. Continue on material disagreement, an unanswered question, or new
+assumptions. When related defects recur across fixes, reassess the shared state,
+ownership or invariant before proposing another local correction. When necessary
+evidence is inaccessible or stale, identify what is missing and qualify the
+conclusion; distinguish a suspected risk from a demonstrated defect.
+Continue on material disagreement, an unanswered question, or new
 evidence; follow-ups should supply only that change, since saved exchanges are
 already supplied. Do not repeat
 settled arguments or seek agreement for its own sake. Finish at a supported
@@ -89,7 +96,7 @@ tracked bytes reuse current-policy completed receipts only when the checkout has
 no untracked files and the same requested model, effort, and native fallback
 selection. Changed settings require fresh inference. Untracked contents are not bulk-read; their presence disables
 cache reuse, and `cache_eligible` reports this on fresh results. Old cache entries
-are invalidated by cache policy 7; their receipts stay readable. Failed reviews
+are invalidated by cache policy 8; their receipts stay readable. Failed reviews
 still require explicit retry across model changes and policy upgrades. Ignored and untracked bytes are
 not certified by the before/after checks. A changed checkout creates a new
 operation and old reviews are identified as older evidence.
@@ -134,8 +141,6 @@ Use local source records for a source review. Live SSH, deployments, learning
 runs and other runtime actions remain the lead's separately authorized work.
 Partners do not inherit permission to perform them. Never run two writers.
 
-For implementation, complete plan review before editing, make the authorized
-change as lead, then request review of the resulting diff and validation.
 Supply the relevant diff hunks, base/head identifiers, necessary source snippets
 and test commands/results; Claude cannot run Git or tests with its file-reading
 tools. Narrow the question to fit the request/context limits. Full saved requests

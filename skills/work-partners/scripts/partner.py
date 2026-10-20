@@ -37,7 +37,7 @@ MAX_CALLS = 4
 MAX_REQUEST = 20000
 MAX_CONTEXT = 100000
 GUARD = "A51_PARTNER_CHILD"
-CACHE_VERSION = 7
+CACHE_VERSION = 8
 DEFAULT_COOLDOWN = 15 * 60
 DEFAULT_MODELS = {"claude": "claude-opus-5-5", "codex": "gpt-6.1-sol"}
 
@@ -528,6 +528,10 @@ def prompt_for(record, question, before):
               "supplied by the lead; state material gaps rather than inventing criteria. For change reviews, "
               "use the supplied relevant diff and test evidence, distinguish independently inspected evidence "
               "from lead-reported results, and state missing-diff or tool limitations. "
+              "When necessary evidence is inaccessible or stale, identify what is missing and qualify the "
+              "conclusion; distinguish a suspected risk from a demonstrated defect. When related defects "
+              "recur across fixes, reassess the shared state, ownership or invariant before proposing "
+              "another local correction. "
               "Give concrete evidence with paths/lines, separate observation from inference, and ask a focused "
               "question_for_lead only when needed. Assess the lead's provisional view independently and challenge "
               "unsupported claims with evidence. On follow-ups, address only material disagreement or new evidence; "
