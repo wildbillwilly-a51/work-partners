@@ -82,7 +82,12 @@ not certify that every file was untouched or that a concurrent change was the
 peer's fault.
 
 Failed, interrupted or timed-out calls never retry automatically. Inspect the
-private receipt before an explicit `--retry`. A shared per-peer quota cooldown
+private receipt before an explicit `--retry`. The default `--timeout` is 600
+seconds for a Codex peer and 240 for a Claude peer (10–900 accepted). The child
+writes its output files directly, so emitted output survives a runner that dies;
+`ask` and `status` mark an operation left `accepted` without a lock holder as
+`RunnerLost`. Expired Claude sign-ins report `AuthenticationFailure` and Codex
+model-capacity errors `ModelUnavailable`; neither sets a cooldown. A shared per-peer quota cooldown
 under `~/.a51/work-partners/availability/` covers all projects and task stores;
 `--retry` cannot bypass it. Cached results remain available. Unknown reset times
 use a labeled 15-minute fallback. Expiry does not start a new call, and running

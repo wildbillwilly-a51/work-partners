@@ -1,12 +1,17 @@
 """Offline invariants for native desktop consultations; no real model calls."""
 import argparse
+import contextlib
+import errno
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest.mock import patch
@@ -747,6 +752,186 @@ p.shared_cooldown('claude',p.QuotaLimited('claude',sys.argv[3],'native_timestamp
             p.invoke([sys.executable, '-u', '-c', 'import time; print("started", flush=True); time.sleep(30)'],
                      'fixture', self.project, directory, .5)
         self.assertIn('started', (directory / 'stdout.jsonl').read_text())
+
+    def test_peer_default_timeouts_reach_run_and_receipts(self):
+        self.args.timeout = None
+        for lead, response, expected in (("codex", self.claude, 240), ("claude", self.codex, 600)):
+            self.args.lead, self.args.task = lead, None
+            seen = []
+            def run(_args, _prompt, _project, _directory, timeout, response=response):
+                seen.append(timeout)
+                return response()
+            result = p.ask(self.args, run=run)
+            self.assertEqual(seen, [expected])
+            record = json.loads(Path(result["receipt"]).read_text())
+            self.assertEqual(record["operations"][0]["timeout_seconds"], expected)
+        self.request.write_text("Explicit deadline question", encoding="utf-8")
+        self.args.timeout, seen = 30, []
+        result = p.ask(self.args, run=lambda *a: seen.append(a[4]) or self.codex())
+        self.assertEqual(seen, [30])
+        self.assertEqual(json.loads(Path(result["receipt"]).read_text())["operations"][-1]["timeout_seconds"], 30)
+        for invalid in (5, 901, True):
+            self.args.timeout, self.args.task = invalid, None
+            with self.assertRaisesRegex(p.Refused, "Timeout"):
+                p.ask(self.args, run=lambda *_: self.fail("Invalid timeout launched inference"))
+        for task in (self.root / "state").iterdir():
+            record = json.loads((task / "task.json").read_text()) if (task / "task.json").exists() else None
+            self.assertTrue(record is None or all(o["status"] == "completed" for o in record["operations"]))
+
+    def test_child_output_streams_to_receipt_files_while_running(self):
+        directory = self.root / "streaming"
+        directory.mkdir()
+        code = ("import sys,time;print('started',flush=True);print('warning',file=sys.stderr,flush=True);"
+                "time.sleep(3)")
+        worker = threading.Thread(target=p.invoke, args=([sys.executable, "-u", "-c", code], "fixture",
+                                                          self.project, directory, 30))
+        worker.start()
+        def emitted():
+            files = [directory / "stdout.jsonl", directory / "stderr.log"]
+            return all(f.exists() for f in files) and "warning" in files[1].read_text()
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and not emitted():
+            time.sleep(.05)
+        self.assertTrue(worker.is_alive())
+        self.assertIn("started", (directory / "stdout.jsonl").read_text())
+        self.assertIn("warning", (directory / "stderr.log").read_text())
+        worker.join(30)
+
+    def test_emitted_output_survives_a_runner_that_dies(self):
+        directory = self.root / "runner-crash"
+        directory.mkdir()
+        pidfile = self.root / "child.pid"
+        child = ("import os,sys,time;open(sys.argv[1],'w').write(str(os.getpid()));"
+                 "print('started',flush=True);time.sleep(60)")
+        helper = ("import importlib.util,sys\n"
+                  "spec=importlib.util.spec_from_file_location('runner',sys.argv[1])\n"
+                  "m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)\n"
+                  "from pathlib import Path\n"
+                  "m.invoke([sys.executable,'-u','-c',sys.argv[2],sys.argv[3]],'fixture',Path(sys.argv[4]),Path(sys.argv[5]),120)\n")
+        runner = subprocess.Popen([sys.executable, "-B", "-c", helper, str(ROOT / "skills/work-partners/scripts/partner.py"),
+                                   child, str(pidfile), str(self.project), str(directory)])
+        try:
+            deadline = time.monotonic() + 20
+            while time.monotonic() < deadline and not (pidfile.exists() and pidfile.read_text()):
+                time.sleep(.05)
+            time.sleep(.5)
+            runner.kill()  # Only the runner; the child is in its own process group.
+            runner.wait(10)
+            self.assertIn("started", (directory / "stdout.jsonl").read_text())
+        finally:
+            if runner.poll() is None:
+                runner.kill()
+            if pidfile.exists() and pidfile.read_text():
+                with contextlib.suppress(OSError):
+                    os.kill(int(pidfile.read_text()), signal.SIGTERM)
+
+    def test_lost_runner_is_reconciled_without_bypassing_retry(self):
+        def lost(*_):
+            raise SystemExit("runner vanished")
+        with self.assertRaises(SystemExit):
+            p.ask(self.args, run=lost)
+        task = next((self.root / "state").iterdir())
+        record = json.loads((task / "task.json").read_text())
+        self.assertEqual(record["operations"][0]["status"], "accepted")
+        status_args = argparse.Namespace(state_root=self.args.state_root, task=task.name)
+        with p.lock(task / "task.lock"):
+            held = p.status(status_args)
+        self.assertTrue(held["runner_lock_held"])
+        self.assertEqual(held["operations"][0]["status"], "accepted")
+        free = p.status(status_args)
+        self.assertFalse(free["runner_lock_held"])
+        self.assertEqual((free["operations"][0]["status"], free["operations"][0]["error_class"]), ("failed", "RunnerLost"))
+        self.assertIn("reconciled_at", free["operations"][0])
+        self.assertNotIn("runner_lock_held", json.loads((task / "task.json").read_text()))
+        self.args.task = task.name
+        with self.assertRaisesRegex(p.Refused, "explicitly use --retry"):
+            p.ask(self.args, run=lambda *_: self.fail("Lost runner bypassed retry gate"))
+        self.args.retry = True
+        self.assertFalse(p.ask(self.args, run=self.claude)["cached"])
+
+    def test_status_command_dispatches_through_main(self):
+        with self.assertRaises(SystemExit):
+            p.ask(self.args, run=lambda *_: (_ for _ in ()).throw(SystemExit()))
+        task = next((self.root / "state").iterdir())
+        argv = ["partner", "--state-root", self.args.state_root, "status", "--task", task.name]
+        output = io.StringIO()
+        with patch.object(sys, "argv", argv), patch.object(sys, "stdout", output):
+            self.assertEqual(p.main(), 0)
+        shown = json.loads(output.getvalue())
+        self.assertFalse(shown["runner_lock_held"])
+        self.assertEqual(shown["operations"][0]["error_class"], "RunnerLost")
+        with patch.object(sys, "argv", argv[:-1] + ["00000000-0000-0000-0000-000000000000"]):
+            with self.assertRaisesRegex(p.Refused, "No saved task"):
+                p.main()
+
+    def test_lock_contention_is_busy_but_other_lock_errors_surface(self):
+        path = self.root / "contended.lock"
+        with p.lock(path):
+            with self.assertRaises(p.StateBusy):
+                with p.lock(path):
+                    self.fail("overlapping consultation")
+        target = "msvcrt.locking" if os.name == "nt" else "fcntl.flock"
+        with patch(target, side_effect=OSError(errno.EIO, "I/O error")):
+            with self.assertRaises(OSError) as raised:
+                with p.lock(self.root / "broken.lock"):
+                    self.fail("lock acquired despite I/O error")
+        self.assertNotIsInstance(raised.exception, p.Refused)
+
+    def test_ask_reconciles_lost_runner_before_gating(self):
+        with self.assertRaises(SystemExit):
+            p.ask(self.args, run=lambda *_: (_ for _ in ()).throw(SystemExit()))
+        task = next((self.root / "state").iterdir())
+        self.args.task = task.name
+        with self.assertRaises(p.Refused):
+            p.ask(self.args, run=lambda *_: self.fail("Lost runner bypassed retry gate"))
+        self.assertEqual(json.loads((task / "task.json").read_text())["operations"][0]["error_class"], "RunnerLost")
+
+    def test_prelaunch_write_failure_is_recorded_as_failed(self):
+        original = p.save
+        def failing(path, data):
+            if path.name == "before.json":
+                raise OSError("disk full")
+            return original(path, data)
+        with patch.object(p, "save", side_effect=failing), self.assertRaises(OSError):
+            p.ask(self.args, run=lambda *_: self.fail("Launched after failed pre-launch write"))
+        task = next((self.root / "state").iterdir())
+        op = json.loads((task / "task.json").read_text())["operations"][0]
+        self.assertEqual((op["status"], op["error_class"]), ("failed", "OSError"))
+
+    def test_sign_in_and_capacity_failures_are_classified_without_cooldown(self):
+        auth = json.dumps(dict(type="result", subtype="success", is_error=True, session_id="expired",
+                               result="Failed to authenticate: OAuth session expired and could not be refreshed"))
+        capacity = "\n".join(json.dumps(v) for v in [
+            dict(type="thread.started", thread_id="busy"),
+            dict(type="error", message="Selected model is at capacity. Please try a different model."),
+            dict(type="turn.failed", error=dict(message="Selected model is at capacity. Please try a different model."))])
+        with self.assertRaises(p.AuthenticationFailure):
+            p.parse("claude", auth)
+        with self.assertRaises(p.ModelUnavailable):
+            p.parse("codex", capacity)
+        for lead, raw, expected in (("codex", auth, p.AuthenticationFailure), ("claude", capacity, p.ModelUnavailable)):
+            self.args.lead, self.args.task, self.args.retry = lead, None, False
+            def failure(*_, raw=raw):
+                raise p.PeerFailure(1, raw)
+            with self.assertRaises(expected):
+                p.ask(self.args, run=failure)
+            task = max((self.root / "state").iterdir(), key=lambda d: d.stat().st_mtime_ns)
+            op = json.loads((task / "task.json").read_text())["operations"][0]
+            self.assertEqual((op["status"], op["error_class"]), ("failed", expected.__name__))
+            self.assertFalse((self.root / "availability").exists() and any((self.root / "availability").glob("*.json")))
+            self.args.task = task.name
+            with self.assertRaisesRegex(p.Refused, "explicitly use --retry"):
+                p.ask(self.args, run=lambda *_: self.fail("Classified failure was cached"))
+        refusal = json.dumps(dict(type="result", is_error=True, stop_reason="refusal", result="Failed to authenticate"))
+        with self.assertRaises(p.ModelRefusal):
+            p.parse("claude", refusal)
+        quoted = dict(RESPONSE, reply="The OAuth session expired path is not logged in; capacity is at capacity.")
+        parsed, _ = p.parse("claude", json.dumps(dict(type="result", subtype="success", is_error=False, session_id="ok",
+                                                      structured_output={"consultation_json": json.dumps(quoted)})))
+        self.assertEqual(parsed, quoted)
+        codex_ok = "\n".join(json.dumps(v) for v in [dict(type="thread.started", thread_id="ok"),
+            dict(type="item.completed", item=dict(type="agent_message", text=json.dumps(quoted))), dict(type="turn.completed")])
+        self.assertEqual(p.parse("codex", codex_ok)[0], quoted)
 
     def test_exhausted_task_refuses_more_inference(self):
         for index in range(4):

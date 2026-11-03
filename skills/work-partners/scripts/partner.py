@@ -8,6 +8,7 @@ if sys.version_info < (3, 12):
 import argparse
 import contextlib
 from datetime import datetime, timedelta, timezone
+import errno
 import hashlib
 import json
 import math
@@ -40,13 +41,29 @@ GUARD = "A51_PARTNER_CHILD"
 CACHE_VERSION = 8
 DEFAULT_COOLDOWN = 15 * 60
 DEFAULT_MODELS = {"claude": "claude-opus-5-5", "codex": "gpt-6.1-sol"}
+# Observed ordinary Codex reviews: median ~205 s, p90 ~380 s; Claude p90 ~190 s.
+PEER_TIMEOUTS = {"claude": 240, "codex": 600}
+# msvcrt reports a held byte-range lock as EDEADLK/EACCES; flock as EAGAIN/EWOULDBLOCK.
+LOCK_CONTENTION = {errno.EACCES, errno.EAGAIN, errno.EWOULDBLOCK, errno.EDEADLK}
 
 
 class Refused(RuntimeError):
     pass
 
 
+class StateBusy(Refused):
+    pass
+
+
 class ModelRefusal(Refused):
+    pass
+
+
+class AuthenticationFailure(Refused):
+    pass
+
+
+class ModelUnavailable(Refused):
     pass
 
 
@@ -146,8 +163,10 @@ def lock(path, wait=0):
                     fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 break
             except OSError as exc:
+                if exc.errno not in LOCK_CONTENTION:
+                    raise
                 if time.monotonic() >= deadline:
-                    raise Refused("Partnership state is busy; try again after the running operation") from exc
+                    raise StateBusy("Partnership state is busy; try again after the running operation") from exc
                 time.sleep(.05)
         try:
             yield
@@ -395,18 +414,17 @@ def invoke(args, prompt, project, directory, timeout):
     for key in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CODEX_THREAD_ID", "CLAUDE_CODE_EFFORT_LEVEL"):
         env.pop(key, None)
     options = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
-    process = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                               cwd=project, env=env, **options)
-    try:
-        stdout, stderr = process.communicate(prompt.encode("utf-8"), timeout=timeout)
-    except (subprocess.TimeoutExpired, KeyboardInterrupt):
-        stop(process)
-        stdout, stderr = process.communicate()
-        (directory / "stdout.jsonl").write_bytes(stdout)
-        (directory / "stderr.log").write_bytes(stderr)
-        raise
-    (directory / "stdout.jsonl").write_bytes(stdout)
-    (directory / "stderr.log").write_bytes(stderr)
+    # The child writes its output files directly, so bytes it has emitted survive
+    # a runner that dies; buffers inside the child cannot be preserved.
+    with (directory / "stdout.jsonl").open("wb") as out, (directory / "stderr.log").open("wb") as err:
+        process = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=out, stderr=err,
+                                   cwd=project, env=env, **options)
+        try:
+            process.communicate(prompt.encode("utf-8"), timeout=timeout)
+        except (subprocess.TimeoutExpired, KeyboardInterrupt):
+            stop(process)
+            raise
+    stdout = (directory / "stdout.jsonl").read_bytes()
     if process.returncode:
         raise PeerFailure(process.returncode, stdout.decode("utf-8-sig", errors="replace"))
     return stdout.decode("utf-8-sig")
@@ -439,6 +457,36 @@ def structured_output_error(peer, stdout):
     return None
 
 
+def native_failure(peer, stdout):
+    """Classify observed native sign-in/capacity error envelopes; never scan successful review text."""
+    if peer == "claude":
+        try:
+            envelope = json.loads(stdout)
+        except (ValueError, TypeError):
+            return None
+        if not isinstance(envelope, dict) or envelope.get("is_error") is not True:
+            return None
+        message = envelope.get("result", envelope.get("message", ""))
+        if isinstance(message, str) and re.search(
+                r"Failed to authenticate|OAuth session expired|not logged in|please run /login", message, re.I):
+            return AuthenticationFailure("Claude CLI sign-in failed or expired; sign in to that CLI yourself, then "
+                                         "explicitly use --retry. The runner never changes sign-ins")
+        return None
+    for line in (stdout or "").splitlines():
+        try:
+            value = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(value, dict) or value.get("type") not in {"error", "turn.failed"}:
+            continue
+        error = value.get("error")
+        message = error.get("message", "") if isinstance(error, dict) else value.get("message", "")
+        if isinstance(message, str) and re.search(r"\bat capacity\b", message, re.I):
+            return ModelUnavailable("Codex reported the selected model at capacity; nothing is retried or switched "
+                                    "automatically. Retry explicitly later or choose a deliberate --model")
+    return None
+
+
 def parse(peer, stdout):
     failure = quota_error(peer, stdout)
     if failure:
@@ -448,7 +496,7 @@ def parse(peer, stdout):
             envelope = json.loads(stdout)
         except (ValueError, TypeError) as exc:
             raise StructuredOutputFailure("Claude returned no JSON result envelope") from exc
-        failure = refusal_error(peer, stdout) or structured_output_error(peer, stdout)
+        failure = refusal_error(peer, stdout) or structured_output_error(peer, stdout) or native_failure(peer, stdout)
         if failure:
             raise failure
         if not isinstance(envelope, dict):
@@ -474,7 +522,7 @@ def parse(peer, stdout):
             if value.get("type") == "thread.started":
                 native_id = value.get("thread_id")
             if value.get("type") in ("error", "turn.failed"):
-                raise Refused("Codex reported an inference failure; inspect its private receipt")
+                raise native_failure(peer, stdout) or Refused("Codex reported an inference failure; inspect its private receipt")
             if value.get("type") == "turn.completed":
                 completed = True
             item = value.get("item", {})
@@ -552,6 +600,29 @@ def prompt_for(record, question, before):
     return prompt
 
 
+def reconcile(record):
+    """Under the task lock no runner owns an accepted operation; mark it lost. Its child may have outlived it."""
+    lost = [op for op in record["operations"] if op["status"] == "accepted"]
+    for op in lost:
+        op.update(status="failed", error_class="RunnerLost", reconciled_at=now())
+    return bool(lost)
+
+
+def status(args):
+    directory = Path(args.state_root).expanduser() / str(args.task)
+    path = directory / "task.json"
+    if not path.is_file():
+        raise Refused("No saved task with that ID")
+    try:
+        with lock(directory / "task.lock"):
+            record = json.loads(path.read_text(encoding="utf-8"))
+            if reconcile(record):
+                save(path, record)
+            return dict(record, runner_lock_held=False)
+    except StateBusy:
+        return dict(json.loads(path.read_text(encoding="utf-8")), runner_lock_held=True)
+
+
 def ask(args, run=invoke):
     project = project_root(args.project)
     state = Path(args.state_root).expanduser().resolve()
@@ -572,6 +643,12 @@ def ask(args, run=invoke):
             project=str(project), created=now(), operations=[])
         if record["lead"] != args.lead or record["project"] != str(project):
             raise Refused("Task lead/project differs; an active task cannot silently change ownership")
+        timeout = getattr(args, "timeout", None)
+        timeout = PEER_TIMEOUTS[record["peer"]] if timeout is None else timeout
+        if isinstance(timeout, bool) or not isinstance(timeout, int) or not 10 <= timeout <= 900:
+            raise Refused("Timeout must be between 10 and 900 seconds")
+        if reconcile(record):
+            save(path, record)
         before = snapshot(project)
         selected, servers = peer_selection(record["peer"], project, getattr(args, "model", None), getattr(args, "effort", None))
         legacy_fingerprint = digest(json.dumps([before["head"], before["status"],
@@ -606,14 +683,14 @@ def ask(args, run=invoke):
             save(opdir / "transport-schema.json", CLAUDE_TRANSPORT_SCHEMA)
         op = dict(key=key, review_key=review_key, requested_selection=selected,
                   status="accepted", request=question, started=now(), project_fingerprint=before["fingerprint"],
-                  cache_version=CACHE_VERSION, cache_eligible=before["cacheable"],
+                  cache_version=CACHE_VERSION, cache_eligible=before["cacheable"], timeout_seconds=timeout,
                   head=before["head"], writable=False, peer_cli=command_args[0], directory=str(opdir))
         record["operations"].append(op)
         save(path, record)
-        save(opdir / "before.json", before)
-        (opdir / "request.txt").write_text(prompt, encoding="utf-8")
         try:
-            stdout = run(command_args, prompt, project, opdir, args.timeout)
+            save(opdir / "before.json", before)
+            (opdir / "request.txt").write_text(prompt, encoding="utf-8")
+            stdout = run(command_args, prompt, project, opdir, timeout)
             op["models_used"] = models_used(record["peer"], stdout)
             response, native_id = parse(record["peer"], stdout)
             native_models = op["models_used"]
@@ -633,7 +710,8 @@ def ask(args, run=invoke):
             if isinstance(exc, PeerFailure):
                 op["models_used"] = models_used(record["peer"], exc.stdout)
                 exc = (quota_error(record["peer"], exc.stdout) or refusal_error(record["peer"], exc.stdout)
-                       or structured_output_error(record["peer"], exc.stdout) or exc)
+                       or structured_output_error(record["peer"], exc.stdout)
+                       or native_failure(record["peer"], exc.stdout) or exc)
             if isinstance(exc, QuotaLimited):
                 # Preserve the native outcome even if shared-state persistence fails.
                 op.update(status="failed", finished=now(), error_class="QuotaLimited", quota=exc.details)
@@ -742,9 +820,10 @@ def main():
     review.add_argument("--retry", action="store_true")
     review.add_argument("--model", help="Explicit peer model/alias override for this call")
     review.add_argument("--effort", help="Explicit peer reasoning effort override for this call")
-    review.add_argument("--timeout", type=int, default=240)
-    status = subs.add_parser("status")
-    status.add_argument("--task", required=True, type=uuid.UUID)
+    review.add_argument("--timeout", type=int, default=None,
+                        help="Seconds, 10-900; default 600 for a Codex peer and 240 for a Claude peer")
+    recover = subs.add_parser("status")
+    recover.add_argument("--task", required=True, type=uuid.UUID)
     diagnostic = subs.add_parser("doctor", help="Check local prerequisites without requesting a model or changing sign-ins")
     diagnostic.add_argument("--project", default=str(Path.cwd()))
     diagnostic.add_argument("--lead", choices=["both", "codex", "claude"], default="both")
@@ -757,11 +836,8 @@ def main():
             raise Refused("Diagnostic timeout must be between 1 and 30 seconds")
         result = doctor(args)
     elif args.action == "status":
-        path = Path(args.state_root).expanduser() / str(args.task) / "task.json"
-        result = json.loads(path.read_text(encoding="utf-8"))
+        result = status(args)
     else:
-        if not 10 <= args.timeout <= 900:
-            raise Refused("Timeout must be between 10 and 900 seconds")
         result = ask(args)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 1 if args.action == "doctor" and not result["local_checks_passed"] else 0

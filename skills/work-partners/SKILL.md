@@ -106,6 +106,13 @@ Codex selection configuration blocks reuse as well as inference.
 Ctrl+C stops the current child process tree and records interruption. A timed
 out/interrupted/failed operation never retries automatically: inspect its
 receipt, then explicitly supply `--retry` if another read-only call is useful.
+The child writes `stdout.jsonl`/`stderr.log` directly, so output it emitted
+survives a runner that dies. An operation still `accepted` when the task lock is
+free has no runner; `ask` and `status` mark it `RunnerLost` (its child may have
+outlived the runner). `status` reports `runner_lock_held`, which is lock
+ownership, not child liveness. Expired Claude sign-ins are
+`AuthenticationFailure` and Codex model-capacity errors are `ModelUnavailable`;
+sign in or wait yourself, then explicitly `--retry`. Neither sets a cooldown.
 The runner supplies the required response contract in the prompt: nonempty
 `reply`, `question_for_lead` (empty string if none),
 and `evidence` (empty array if none). Claude's native schema carries one
@@ -126,6 +133,25 @@ call; `--retry` cannot bypass the cooldown. Cached delivery remains available.
 An unparseable reset uses a labeled 15-minute fallback, not a claimed native reset.
 Expiry permits an explicit next call; nothing retries automatically. Calls already
 running when another task discovers a limit may finish normally.
+
+## Operating limits
+
+- Request file: nonempty UTF-8, at most 20,000 characters. The assembled prompt
+  with saved exchanges is capped at 100,000; past that, summarize deliberately in
+  a new task. Point the peer at files in the checkout instead of pasting them.
+- `--timeout`: 10–900 seconds; default 600 for a Codex peer and 240 for a Claude
+  peer, recorded as `timeout_seconds`. A timeout keeps the logs, but the work
+  cannot be continued, so narrow broad reviews instead of relying on the maximum.
+  Long calls may run in the background with output redirected to a file.
+- Read boundaries: in observed use the Claude peer's file tools reach only the
+  `--project` checkout (not other repositories, temporary folders or worktrees
+  elsewhere). Codex's read-only sandbox blocks writes but does not confine reads,
+  so it is not a privacy boundary. Supply needed outside material in the request.
+- Checkout stability: if editing must continue during a review, create a
+  detached worktree at the reviewed state and start the task there; a task cannot
+  move to another project path.
+- `--lead` names the app actually leading. Declaring the other app to obtain a
+  same-tool peer is unsupported and makes receipts misstate the direction.
 
 ## Boundaries
 
@@ -151,4 +177,7 @@ and review the actual relevant delta as needed instead of repeating a stale plan
 Resolve disagreements against evidence; report material unresolved questions.
 Distinguish peer-reviewed changes from later corrections verified only by the
 lead, without adding a review round solely for agreement. A peer's confidence
-or agreement is not validation.
+or agreement is not validation. Do not present source-only peer agreement as
+validation of rendered UX, deployed behavior, or owner intent. Carry material
+review limitations and unresolved authorization questions into the reconciled
+report; resolve authority against the owner's actual instructions.
