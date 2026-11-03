@@ -1,9 +1,10 @@
 # Work partners
 
 Let Codex and Claude Code discuss a project using their existing native CLIs.
-The app receiving your task leads and owns edits. The other agent provides
+The app receiving your task leads and owns edits. The selected peer provides
 bounded, read-only evidence, questions and challenges until there is a useful
-conclusion, tradeoff or next test.
+conclusion, tradeoff or next test. The default is the other tool; an explicitly
+requested same-tool peer is also supported.
 
 Source-available, free to install and use on your own computers. Redistribution,
 commercial distribution and publication of modified versions require written
@@ -12,9 +13,9 @@ permission. This is not an open-source license. See [NOTICE](NOTICE).
 ## Requirements
 
 - Python 3.12+ and Git on the local computer.
-- Compatible Codex and Claude Code CLIs, working sign-ins, access to the selected
-  models and available account quota. The runner needs the other agent's CLI for
-  one direction; exercising both directions needs both CLIs.
+- The selected peer's compatible native CLI, working sign-in, model access and
+  available account quota. Same-tool use needs only that tool's CLI; exercising
+  all four lead/peer pairings needs both CLIs.
 - A local Git checkout to review, and permission to save private task state
   outside it, in your home directory.
 
@@ -59,7 +60,9 @@ variables unless explicit root options are supplied.
 `doctor` uses CLI version/help and Git metadata probes with bounded timeouts. It
 makes no model request, sign-in change or task-state write. Vendor startup activity
 is outside the check's control. Use `--lead codex` to check the Claude peer,
-`--lead claude` for Codex, or the default to check both.
+`--lead claude` for Codex, or the default to check both. `--peer codex` or
+`--peer claude` checks only that peer, overriding `--lead`; use this on a
+single-tool installation.
 
 A pass verifies advertised flags only. Sign-in, model entitlement, remaining
 quota, native settings/fallback support, sandbox enforcement and live delivery
@@ -79,6 +82,11 @@ your current project. New chats discover the skill; an existing chat can reread
 the installed SKILL.md. [Usage](docs/desktop-partners.md) covers manual commands,
 follow-ups and safeguards. [Testing](docs/testing.md) covers offline and explicit
 live checks.
+
+For an explicitly requested same-tool review, use `ask --lead codex --peer codex`
+or `ask --lead claude --peer claude` with the usual project/request arguments.
+Follow-ups retain the saved peer when `--peer` is omitted. Peer selection does
+not automatically change when a tool is missing or quota-limited.
 
 The default peers are Claude Opus 5.5/high and Codex GPT-6.1 Sol/high. Codex
 top-level model/effort configuration and intentional `--model` / `--effort`

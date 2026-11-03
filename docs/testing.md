@@ -9,12 +9,15 @@ python -B -m unittest discover -s tests -p test_desktop_partners.py
 ```
 
 Use `python3` on systems where that is the compatible interpreter. Tests create
-temporary Git fixtures and mock model responses. They cover both directions,
+temporary Git fixtures and mock model responses. They cover all four pairings,
 discussion context, strict delivery, caches/upgrades, shared cooldowns, quota
 parsing, retry gates, locks, tracked changes, timeout termination, call bounds,
 CLI restrictions, prerequisite checks and installation preservation/custom roots.
 They make no model request or sign-in change. They do not prove vendor behavior,
 account access or complete sandbox enforcement.
+Explicit-peer cases also cover saved-peer follow-ups, legacy binding, peer mismatch
+without receipt mutation, preflight failures, actual-peer cooldowns/call limits,
+ask/doctor CLI dispatch and checking one peer without requiring the other CLI.
 
 ## Installation and local checks
 
@@ -33,6 +36,7 @@ For a real installation, omit `--home`. The installed runner's `doctor` verifies
 local advertised options with no model request or task-state write. Missing flags
 fail without safety downgrades. Sign-ins, model access, quota, native settings and
 sandbox efficacy remain unverified; the permission estimate is advisory.
+`doctor --peer codex|claude` checks only that peer regardless of `--lead`.
 
 ## Explicit live acceptance
 
@@ -47,7 +51,8 @@ python -B tests/manual_desktop_partners.py --output "$env:USERPROFILE/.a51/work-
 ```
 
 It asks Claude to read the installed skill and invoke the specified runner once,
-then checks the completed Codex receipt, cached redelivery and tracked bytes.
+then checks the completed selected-peer receipt, cached redelivery and tracked bytes.
+Add `--peer claude` to exercise an actual Claude lead consulting a Claude peer.
 The arithmetic fixture intentionally omits the last value; inspect the result
 to confirm the peer finds that defect. `--project <git-root>` selects an existing
 authorized target instead. On POSIX, use the matching Python executable and
@@ -57,7 +62,8 @@ For a Codex lead consulting Claude, invoke the installed runner with `--lead
 codex`, pointing to a small Git fixture and request outside it. Use the returned
 task ID for a focused follow-up. Check field types, evidence, an empty question
 when resolved, unchanged tracked bytes and cached delivery. Keep within four
-calls. Native model usage alone does not prove the final answering model.
+calls. Add `--peer codex` for an explicitly requested Codex-to-Codex check.
+Native model usage alone does not prove the final answering model.
 
 Native discovery and CLI function are distinct. Restricted Claude peers hide
 personal skills; they receive their read-only instructions directly. Normal new

@@ -4,6 +4,16 @@ The app receiving the task is the lead. It owns edits and final decisions. The
 peer stays read-only and cannot grant authority. Switching apps does not silently
 transfer ownership. Never use two writers on the same files.
 
+The default peer is the other tool. For an explicitly requested same-tool peer,
+add `--peer codex` with `--lead codex`, or `--peer claude` with `--lead claude`.
+Keep the lead truthful. An existing task retains its saved peer when `--peer` is
+omitted and refuses an explicit different peer. Choose the peer for the current
+work package and relevant follow-ups; no new partnership request is needed for
+each review. Ordinary solo work stays solo. There is no automatic unavailable-peer
+fallback. A fresh same-tool review adds provider usage and may share blind spots.
+Only the selected peer's CLI is required; `doctor --peer codex|claude` checks that
+peer regardless of `--lead`. Shared cooldowns follow the actual peer in all pairings.
+
 ## Ask and discuss
 
 The installed skill documents the workflow. For implementation, complete plan
@@ -24,6 +34,17 @@ with those goals and challenge unsupported assumptions. Read its reply, question
 the same `--task <id>` to answer a question, introduce material new evidence or
 resolve disagreement. Saved completed exchanges accompany each fresh native
 session; this does not take over an existing desktop conversation.
+
+The request file is the evidence packet. Reference relevant checkout files by
+path/line; inline necessary outside excerpts with their source and capture
+time/version. Include the relevant diff/base/head identifiers, test commands,
+results and log output, and identify lead-reported observations and material
+access gaps. Outside paths alone supply no evidence. Select excerpts within the
+20,000-character request and 100,000-character assembled-context limits; state
+omissions rather than silently truncating. If another checkout is the whole review
+target, scope a separate consultation there. Bound tasks cannot move checkout,
+and new tasks must not evade the call cap. Full attachments and extra read roots
+remain unsupported; the lead captures external evidence.
 
 When related defects recur across fixes, reassess shared state, ownership or
 invariants before another local correction. When necessary evidence is

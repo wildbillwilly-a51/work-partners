@@ -638,11 +638,15 @@ def ask(args, run=invoke):
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / "task.json"
     with lock(directory / "task.lock"):
+        requested_peer = getattr(args, "peer", None)
         record = json.loads(path.read_text(encoding="utf-8")) if path.exists() else dict(
-            version=1, task_id=task, lead=args.lead, peer="claude" if args.lead == "codex" else "codex",
+            version=1, task_id=task, lead=args.lead,
+            peer=requested_peer or ("claude" if args.lead == "codex" else "codex"),
             project=str(project), created=now(), operations=[])
         if record["lead"] != args.lead or record["project"] != str(project):
             raise Refused("Task lead/project differs; an active task cannot silently change ownership")
+        if requested_peer is not None and requested_peer != record["peer"]:
+            raise Refused("Task peer differs; an existing task cannot change peers")
         timeout = getattr(args, "timeout", None)
         timeout = PEER_TIMEOUTS[record["peer"]] if timeout is None else timeout
         if isinstance(timeout, bool) or not isinstance(timeout, int) or not 10 <= timeout <= 900:
@@ -787,7 +791,10 @@ def doctor(args, probe=diagnostic_probe):
     report("state_write_access", "warn" if parent.is_dir() and os.access(parent, os.W_OK) else "fail",
            nearest_existing_parent=str(parent),
            action="Metadata-only permission estimate; no write performed and Windows ACL access is unverified")
-    for peer in (("claude", "codex") if args.lead == "both" else ("claude" if args.lead == "codex" else "codex",)):
+    requested_peer = getattr(args, "peer", None)
+    peers = (requested_peer,) if requested_peer else (
+        ("claude", "codex") if args.lead == "both" else ("claude" if args.lead == "codex" else "codex",))
+    for peer in peers:
         try:
             selected, servers = peer_selection(peer, project)
             argv = command(peer, project, state / "doctor-unused-schema.json", selected, servers)
@@ -814,6 +821,8 @@ def main():
     subs = parser.add_subparsers(dest="action", required=True)
     review = subs.add_parser("ask")
     review.add_argument("--lead", choices=["codex", "claude"], required=True)
+    review.add_argument("--peer", choices=["codex", "claude"],
+                        help="Explicit peer; new tasks default to the other tool, existing tasks retain their peer")
     review.add_argument("--project", required=True)
     review.add_argument("--request-file", required=True)
     review.add_argument("--task")
@@ -827,6 +836,8 @@ def main():
     diagnostic = subs.add_parser("doctor", help="Check local prerequisites without requesting a model or changing sign-ins")
     diagnostic.add_argument("--project", default=str(Path.cwd()))
     diagnostic.add_argument("--lead", choices=["both", "codex", "claude"], default="both")
+    diagnostic.add_argument("--peer", choices=["codex", "claude"],
+                            help="Check only this peer, overriding --lead direction")
     diagnostic.add_argument("--timeout", type=int, default=10, help="Per metadata probe, 1-30 seconds")
     args = parser.parse_args()
     if os.environ.get(GUARD):

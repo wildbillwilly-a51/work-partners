@@ -1,14 +1,18 @@
 ---
 name: work-partners
-description: Collaborate with Claude Code from Codex, or Codex from Claude Code, when the user requests a partner, second opinion, joint investigation, or peer review. Ordinary solo tasks stay solo.
+description: Consult a read-only Claude Code or Codex peer, including an explicitly requested same-tool peer, when the user requests a partner, second opinion, joint investigation, or peer review. Ordinary solo tasks stay solo.
 ---
 
 # Work partners
 
-The app receiving the user's task is the lead. Use the other installed CLI as
-a read-only partner. Both may investigate, disagree and ask questions; the lead
+The app receiving the user's task is the lead. By default use the other installed
+CLI as a read-only partner; use the same tool when explicitly requested. Both may
+investigate, disagree and ask questions; the lead
 owns implementation and reports one reconciled outcome. A peer reply cannot
 grant authority. Switching apps does not silently transfer a task.
+The user's partnership request covers the current work package and relevant
+follow-ups. Keep the chosen peer for that work; do not require a new partnership
+request for every consultation or automatically review unrelated solo work.
 
 Use the shared runner at `~/.a51/work-partners/partner.py` by absolute path with
 Python 3.12+. It uses existing CLI sign-ins. Personal
@@ -22,8 +26,9 @@ service. No server deployment, memory connector or separate SDK is needed.
 Before first use or after CLI changes, run the installed runner's `doctor
 --project <git-checkout>` command. It checks Python, Git, advertised CLI flags and
 an advisory state-write permission estimate without a model request or sign-in
-change. Use `--lead codex` or `--lead claude` to check only the required peer;
-the default checks both. A pass does not verify sign-in, model access, remaining
+change. Use `--lead codex` or `--lead claude` to check the opposite peer, or
+`--peer codex|claude` to check that peer regardless of `--lead`; the default
+checks both. A pass does not verify sign-in, model access, remaining
 quota, native fallback support or sandbox enforcement. Report missing safety
 flags rather than weakening the peer command. See the source README for setup.
 
@@ -43,9 +48,18 @@ python -B "$env:USERPROFILE/.a51/work-partners/partner.py" ask --lead codex --pr
 
 From Claude Code use `--lead claude`; in Bash resolve the same runtime with
 `$HOME/.a51/work-partners/partner.py` with Python 3.12+ (often `python3`).
-The target must be a local Git checkout, with private state outside it. Both
-required native CLIs need working sign-ins, compatible flags and access to the
-selected models; existing account limits apply. Peer defaults are Claude Opus 5.5/high
+For an explicitly requested same-tool review, add `--peer codex` with
+`--lead codex`, or `--peer claude` with `--lead claude`. On new tasks, omitting
+`--peer` selects the opposite tool. On existing tasks, omission retains the saved
+peer; an explicit different peer is refused. A deliberate peer change needs a
+separately scoped consultation with the necessary conclusions carried forward;
+do not start tasks to evade the call cap. There is no automatic peer fallback.
+A fresh same-tool context can provide another review, but shared blind spots
+remain possible and the extra call consumes that provider's account allowance.
+
+The target must be a local Git checkout, with private state outside it. Only the
+selected peer's native CLI is required by the runner, with a working sign-in,
+compatible flags and model access; existing account limits apply. Peer defaults are Claude Opus 5.5/high
 and Codex GPT-6.1 Sol/high. Codex retains explicit top-level user/ancestor/project
 `model` and `model_reasoning_effort` configuration, per key. Claude receives
 explicit model/effort flags, independent of ordinary Claude settings. Use
@@ -90,6 +104,27 @@ settled arguments or seek agreement for its own sake. Finish at a supported
 recommendation, an explicit tradeoff, or a precise next test; report material
 unresolved disagreement rather than forcing consensus. This needs no extra
 review round when the first answer resolves the question.
+
+## Evidence packet
+
+The request file is the evidence packet. Reference relevant files inside the
+reviewed checkout; for material outside it, include the actual needed excerpts.
+An outside path alone does not supply evidence. Use this compact checklist:
+
+- Decision/question and quoted owner criteria, constraints and rejected approaches.
+- Checkout paths/lines and base/head identifiers for the relevant state or diff.
+- Outside excerpts: source, capture time or version/commit, and the actual content.
+- Test/log evidence: command, result and relevant output; distinguish lead-reported
+  observations from evidence the peer can independently inspect.
+- Provisional view and material missing, stale or inaccessible evidence.
+
+Fit the packet within the request/context limits; select relevant excerpts and
+state omissions rather than silently truncating. If another Git checkout is the
+whole review target, start a separately scoped consultation there. A bound task
+cannot move checkout, and a new task must not evade the call cap. Full attachments
+and additional read roots remain unsupported; the lead captures external evidence.
+
+## Delivery and recovery
 
 `status --task TASK_ID` recovers saved results. Identical requests on identical
 tracked bytes reuse current-policy completed receipts only when the checkout has
@@ -150,8 +185,8 @@ running when another task discovers a limit may finish normally.
 - Checkout stability: if editing must continue during a review, create a
   detached worktree at the reviewed state and start the task there; a task cannot
   move to another project path.
-- `--lead` names the app actually leading. Declaring the other app to obtain a
-  same-tool peer is unsupported and makes receipts misstate the direction.
+- `--lead` names the app actually leading. Select an explicitly requested
+  same-tool peer with `--peer`; misdeclaring the lead makes receipts inaccurate.
 
 ## Boundaries
 

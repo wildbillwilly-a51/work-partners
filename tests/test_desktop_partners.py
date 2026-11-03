@@ -88,6 +88,139 @@ class Partners(unittest.TestCase):
             return self.claude()
         p.ask(self.args, run=followup)
 
+    def test_explicit_peer_routes_all_four_pairings_with_unchanged_restrictions(self):
+        self.fake_command.stop()
+        self.args.timeout = None
+        with patch.object(p, "trusted_executable", side_effect=lambda peer, _: str(self.root / peer)), \
+                patch.object(p, "configuration", return_value=({}, {"blocked"})):
+            for lead in ("codex", "claude"):
+                for peer, response in (("codex", self.codex), ("claude", self.claude)):
+                    with self.subTest(lead=lead, peer=peer):
+                        self.args.lead, self.args.peer, self.args.task = lead, peer, None
+                        def review(argv, prompt, _project, _directory, timeout):
+                            self.assertEqual(Path(argv[0]).name, peer)
+                            self.assertEqual(timeout, p.PEER_TIMEOUTS[peer])
+                            payload = json.loads(prompt.split("\n", 1)[1])
+                            self.assertEqual(payload["lead"], lead)
+                            if peer == "claude":
+                                self.assertEqual(argv[argv.index("--tools") + 1], "Read,Glob,Grep")
+                                self.assertIn("--restricted", argv)
+                                self.assertIn("--safe-mode", argv)
+                                self.assertIn("--strict-mcp-config", argv)
+                                self.assertIn("Use StructuredOutput", prompt)
+                            else:
+                                self.assertEqual(argv[argv.index("--sandbox") + 1], "read-only")
+                                self.assertIn('approval_policy="never"', argv)
+                                self.assertIn("features.hooks=false", argv)
+                                self.assertIn("features.plugins=false", argv)
+                                self.assertIn("features.multi_agent=false", argv)
+                                self.assertIn('mcp_servers."blocked"={command="python",enabled=false}', argv)
+                                self.assertIn("Return one unfenced JSON object", prompt)
+                            return response()
+                        result = p.ask(self.args, run=review)
+                        record = json.loads(Path(result["receipt"]).read_text())
+                        self.assertEqual((record["lead"], record["peer"]), (lead, peer))
+                        self.assertEqual(result["requested_selection"]["peer"], peer)
+                        self.assertEqual(record["operations"][0]["timeout_seconds"], p.PEER_TIMEOUTS[peer])
+                        self.assertFalse(record["operations"][0]["writable"])
+
+    def test_same_tool_peer_is_retained_for_cache_and_followups(self):
+        for peer, response in (("codex", self.codex), ("claude", self.claude)):
+            self.args.lead, self.args.peer, self.args.task = peer, peer, None
+            first = p.ask(self.args, run=response)
+            self.args.task = first["task_id"]
+            for selection in (None, peer):
+                self.args.peer = selection
+                self.assertTrue(p.ask(self.args, run=lambda *_: self.fail("duplicate inference"))["cached"])
+            self.args.peer = None
+            self.request.write_text("Follow up on " + peer, encoding="utf-8")
+            def followup(_argv, prompt, *_rest):
+                payload = json.loads(prompt.split("\n", 1)[1])
+                self.assertEqual(len(payload["prior_exchanges"]), 1)
+                self.assertEqual(payload["lead"], peer)
+                return response()
+            result = p.ask(self.args, run=followup)
+            self.assertEqual(result["requested_selection"]["peer"], peer)
+            self.assertEqual(len(json.loads(Path(result["receipt"]).read_text())["operations"]), 2)
+
+    def test_peer_mismatch_preserves_legacy_and_same_tool_receipts_before_cooldown(self):
+        instant = 1792262157
+        with patch.object(p.time, "time", return_value=instant):
+            for selected in (None, "codex"):
+                self.args.peer, self.args.task = selected, None
+                result = p.ask(self.args, run=self.claude if selected is None else self.codex)
+                self.args.task = result["task_id"]
+                path = Path(result["receipt"])
+                before = path.read_bytes()
+                self.args.peer = "codex" if selected is None else "claude"
+                p.shared_cooldown(self.args.peer, p.QuotaLimited(self.args.peer, p.utc_stamp(instant + 60), "native_timestamp"))
+                for retry in (False, True):
+                    self.args.retry = retry
+                    with self.assertRaisesRegex(p.Refused, "Task peer differs"):
+                        p.ask(self.args, run=lambda *_: self.fail("mismatched peer launched"))
+                    self.assertEqual(path.read_bytes(), before)
+                # Keep the two independent binding checks clear of each other's preflight quota.
+                (self.root / "availability" / (self.args.peer + ".json")).unlink()
+
+    def test_preflight_without_receipt_does_not_bind_a_peer(self):
+        self.args.task = "00000000-0000-0000-0000-000000000001"
+        self.args.peer = "codex"
+        path = self.root / "state" / self.args.task / "task.json"
+        self.command_mock.side_effect = FileNotFoundError("missing selected CLI")
+        with self.assertRaises(FileNotFoundError):
+            p.ask(self.args, run=lambda *_: self.fail("missing peer launched"))
+        self.assertFalse(path.exists())
+        self.command_mock.side_effect = None
+        self.args.peer = "claude"
+        p.ask(self.args, run=self.claude)
+        self.assertEqual(json.loads(path.read_text())["peer"], "claude")
+
+    def test_same_tool_failure_retry_and_call_cap_are_unchanged(self):
+        for peer, response in (("codex", self.codex), ("claude", self.claude)):
+            self.args.lead, self.args.peer, self.args.task, self.args.retry = peer, peer, None, False
+            self.request.write_text("initial " + peer, encoding="utf-8")
+            def fail(*_):
+                raise RuntimeError("native fixture failure")
+            with self.assertRaises(RuntimeError):
+                p.ask(self.args, run=fail)
+            records = [json.loads(path.read_text()) for path in (self.root / "state").glob("*/task.json")]
+            self.args.task = next(r["task_id"] for r in records if r["peer"] == peer)
+            self.args.peer = None
+            with self.assertRaisesRegex(p.Refused, "--retry"):
+                p.ask(self.args, run=lambda *_: self.fail("automatic retry"))
+            self.args.retry = True
+            p.ask(self.args, run=response)
+            for index in range(2):
+                self.request.write_text(peer + str(index), encoding="utf-8")
+                p.ask(self.args, run=response)
+            self.request.write_text(peer + " exhausted", encoding="utf-8")
+            with self.assertRaisesRegex(p.Refused, "Four-call"):
+                p.ask(self.args, run=lambda *_: self.fail("cap bypassed"))
+
+    def test_same_tool_uses_selected_peer_cooldown_without_spending_a_call(self):
+        instant = 1792262157
+        with patch.object(p.time, "time", return_value=instant):
+            p.shared_cooldown("claude", p.QuotaLimited("claude", p.utc_stamp(instant + 60), "native_timestamp"))
+            self.args.lead, self.args.peer = "codex", "codex"
+            self.assertFalse(p.ask(self.args, run=self.codex)["cached"])
+            self.args.lead, self.args.peer, self.args.task = "claude", "claude", None
+            with self.assertRaises(p.QuotaLimited):
+                p.ask(self.args, run=lambda *_: self.fail("cooldown bypassed"))
+            records = list((self.root / "state").glob("*/task.json"))
+            self.assertEqual(len(records), 1)
+            self.assertEqual(json.loads(records[0].read_text())["peer"], "codex")
+
+    def test_ask_peer_option_dispatches_through_main(self):
+        real_ask = p.ask
+        argv = ["partner", "--state-root", self.args.state_root, "ask", "--lead", "codex", "--peer", "codex",
+                "--project", str(self.project), "--request-file", str(self.request)]
+        output = io.StringIO()
+        with patch.object(sys, "argv", argv), patch.object(sys, "stdout", output), \
+                patch.object(p, "ask", side_effect=lambda args: real_ask(args, run=self.codex)):
+            self.assertEqual(p.main(), 0)
+        record = json.loads(Path(json.loads(output.getvalue())["receipt"]).read_text())
+        self.assertEqual((record["lead"], record["peer"]), ("codex", "codex"))
+
     def test_both_peers_receive_the_native_response_contract_in_the_prompt(self):
         for lead, response in (("codex", self.claude), ("claude", self.codex)):
             self.args.lead, self.args.task = lead, None
@@ -965,9 +1098,9 @@ p.shared_cooldown('claude',p.QuotaLimited('claude',sys.argv[3],'native_timestamp
             self.assertIn('model="gpt-6.1-sol"', codex)
             self.assertIn('model_reasoning_effort="high"', codex)
 
-    def doctor_fixture(self, lead="both", help_override=None, failure=None):
+    def doctor_fixture(self, lead="both", help_override=None, failure=None, peer=None):
         self.fake_command.stop()
-        args = argparse.Namespace(project=str(self.project), state_root=str(self.root / "private/state"), lead=lead, timeout=1)
+        args = argparse.Namespace(project=str(self.project), state_root=str(self.root / "private/state"), lead=lead, timeout=1, peer=peer)
         calls = []
         helps = {
             "claude": "-p --restricted --safe-mode --strict-mcp-config --settings --model --effort "
@@ -1021,6 +1154,23 @@ p.shared_cooldown('claude',p.QuotaLimited('claude',sys.argv[3],'native_timestamp
             result, _ = self.doctor_fixture(failure=error)
             self.assertFalse(result["local_checks_passed"])
             self.assertEqual(result["checks"][-1]["status"], "pass")  # Other peer still checked.
+
+    def test_doctor_explicit_peer_overrides_direction_without_other_cli(self):
+        for lead in ("both", "codex", "claude"):
+            for peer in ("codex", "claude"):
+                result, calls = self.doctor_fixture(lead=lead, peer=peer, failure=FileNotFoundError() if peer == "codex" else None)
+                self.assertTrue(result["local_checks_passed"])
+                self.assertEqual([c["check"] for c in result["checks"] if c["check"].endswith("_cli")], [peer + "_cli"])
+                self.assertEqual([Path(c[0]).name for c in calls], ["git", "git", peer, peer])
+
+    def test_doctor_peer_option_dispatches_through_main(self):
+        argv = ["partner", "doctor", "--project", str(self.project), "--lead", "codex", "--peer", "codex"]
+        def diagnostic(args):
+            self.assertEqual((args.lead, args.peer), ("codex", "codex"))
+            return {"local_checks_passed": True}
+        with patch.object(sys, "argv", argv), patch.object(sys, "stdout", io.StringIO()), \
+                patch.object(p, "doctor", side_effect=diagnostic):
+            self.assertEqual(p.main(), 0)
 
     def test_doctor_invalid_project_state_and_untrusted_executable(self):
         args = argparse.Namespace(project=str(self.project), state_root=str(self.project / "state"), lead="both", timeout=1)

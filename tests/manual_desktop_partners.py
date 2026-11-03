@@ -1,4 +1,4 @@
-"""Owner-authorized live acceptance: installed skill, actual Claude lead -> Codex peer.
+"""Owner-authorized live acceptance: installed skill, actual Claude lead -> selected peer.
 
 Codex -> Claude is exercised directly by the initiating Codex desktop task.
 This test uses only local source; private evidence lives outside the target repo.
@@ -44,6 +44,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project", type=Path, help="Existing Git checkout; omit for a disposable fixture")
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--peer", choices=["codex", "claude"], default="codex")
     args = parser.parse_args()
     runtime = Path.home() / ".a51/work-partners/partner.py"
     skill = Path(os.environ.get("CLAUDE_CONFIG_DIR", str(Path.home() / ".claude"))) / "skills/work-partners/SKILL.md"
@@ -57,7 +58,7 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     if project is None:
         project = create_fixture(output)
-    request = output / "claude-to-codex.txt"
+    request = output / f"claude-to-{args.peer}.txt"
     request.write_text(
         "Read-only review of this source checkout: read AGENTS.md and README.md if present, then "
         "the directly relevant source. Identify concrete defects or unmet requirements with file/line "
@@ -67,12 +68,12 @@ def main():
     task = str(uuid.uuid4())
     python = Path(sys.executable).as_posix()
     command = " ".join(shlex.quote(x) for x in [python, "-B", runtime.as_posix(), "ask", "--lead", "claude",
-        "--project", project.as_posix(), "--request-file", request.as_posix(), "--task", task, "--timeout", "240"])
+        "--peer", args.peer, "--project", project.as_posix(), "--request-file", request.as_posix(), "--task", task, "--timeout", "240"])
     prefix = " ".join(shlex.quote(x) for x in [python, "-B", runtime.as_posix()])
     prompt = ("You are the Claude desktop lead in an owner-authorized, read-only partnership acceptance test. "
               f"First Read the installed skill at {skill.as_posix()}. Then use Bash exactly once to run the "
               "following shared-runner command, in the foreground with a 300000 ms tool timeout. This asks "
-              "Codex, your read-only partner, to review the actual project. Do not run any other shell command, "
+              f"{args.peer}, your read-only partner, to review the actual project. Do not run any other shell command, "
               "edit anything, access hosts/network directly, or delegate any additional work. Report the "
               "partner's findings, question and task ID. A successful skill invocation requires actually running "
               "the command; explaining it is insufficient.\n" + command)
@@ -119,18 +120,18 @@ def main():
     task_path = Path.home() / ".a51/work-partners/state" / task / "task.json"
     record = json.loads(task_path.read_text(encoding="utf-8"))
     op = record["operations"][-1]
-    if record["lead"] != "claude" or record["peer"] != "codex" or op["status"] != "completed":
-        raise RuntimeError("No completed Codex peer receipt from the Claude lead")
+    if record["lead"] != "claude" or record["peer"] != args.peer or op["status"] != "completed":
+        raise RuntimeError("No completed selected-peer receipt from the Claude lead")
     # Re-delivery must return the saved result, not create another native call.
     cached = subprocess.run([sys.executable, "-B", str(runtime), "ask", "--lead", "claude", "--project", str(project),
-        "--request-file", str(request), "--task", task], capture_output=True, text=True, encoding="utf-8", timeout=30)
+        "--peer", args.peer, "--request-file", str(request), "--task", task], capture_output=True, text=True, encoding="utf-8", timeout=30)
     if cached.returncode or not json.loads(cached.stdout)["cached"]:
         raise RuntimeError("Completed-response re-delivery was not cached")
     after = partner.snapshot(project)
     partner.save(output / "after.json", after)
     if before != after:
         raise RuntimeError("Reviewed checkout changed; inspect private before/after evidence")
-    proof = dict(passed=True, direction="claude-lead-to-codex-peer", task_id=task, receipt=str(task_path),
+    proof = dict(passed=True, direction=f"claude-lead-to-{args.peer}-peer", task_id=task, receipt=str(task_path),
         installed_skill_sha256=hashlib.sha256(skill.read_bytes()).hexdigest(),
         actual_lead_tools=[t["name"] for t in tools], native_peer_session_id=op["native_session_id"],
         project_head=after["head"], project_unchanged=True, completed_redelivery_cached=True,
