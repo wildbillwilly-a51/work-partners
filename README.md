@@ -1,10 +1,10 @@
 # Work partners
 
 Let Codex and Claude Code discuss a project using their existing native CLIs.
-The app receiving your task leads and owns edits. The selected peer provides
-bounded, read-only evidence, questions and challenges until there is a useful
-conclusion, tradeoff or next test. The default is the other tool; an explicitly
-requested same-tool peer is also supported.
+The app receiving your task leads and owns edits. The selected peer stays
+read-only and contributes ideas, evidence, questions and challenges. Work toward
+useful ideas, a conclusion, tradeoff or next test. The default is the other tool;
+an explicitly requested same-tool peer is also supported.
 
 Source-available, free to install and use on your own computers. Redistribution,
 commercial distribution and publication of modified versions require written

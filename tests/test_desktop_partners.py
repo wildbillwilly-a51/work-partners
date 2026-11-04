@@ -426,7 +426,7 @@ class Partners(unittest.TestCase):
         self.assertFalse(p.ask(self.args, run=self.claude)["cached"])
 
     def test_recent_policy_success_runs_fresh_and_recaches_for_both_peers(self):
-        for version in (6, 7):
+        for version in (6, 7, 8):
             for lead, response in (("codex", self.claude), ("claude", self.codex)):
                 with self.subTest(version=version, lead=lead):
                     self.args.lead, self.args.task = lead, None
@@ -449,7 +449,7 @@ class Partners(unittest.TestCase):
     def test_recent_policy_failure_keeps_retry_gate_for_both_peers(self):
         def timeout(*_):
             raise subprocess.TimeoutExpired("fixture", 30)
-        for version in (6, 7):
+        for version in (6, 7, 8):
             for lead, response in (("codex", self.claude), ("claude", self.codex)):
                 with self.subTest(version=version, lead=lead):
                     self.args.lead, self.args.task, self.args.retry = lead, None, False

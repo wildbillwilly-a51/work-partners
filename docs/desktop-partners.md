@@ -28,12 +28,15 @@ python -B "$env:USERPROFILE/.a51/work-partners/partner.py" ask --lead codex --pr
 From Claude Code use `--lead claude`. On POSIX use Python 3.12+ (often `python3`)
 and `$HOME/.a51/work-partners/partner.py`. Run `--help` for all options.
 
-Supply the decision, relevant evidence and provisional view. Quote relevant owner
-criteria, constraints and rejected approaches so the peer can flag conflicts
-with those goals and challenge unsupported assumptions. Read its reply, question and evidence. Use
-the same `--task <id>` to answer a question, introduce material new evidence or
-resolve disagreement. Saved completed exchanges accompany each fresh native
-session; this does not take over an existing desktop conversation.
+Supply the decision to resolve or goal to explore and relevant evidence. Quote
+owner criteria, constraints and rejected approaches, distinct from your proposals.
+Share your thinking when it helps, leaving room for the partner to form their own
+view. Either participant may propose ideas, question the framing or follow a useful
+thread. Check ideas against the owner's criteria and challenge unsupported assumptions.
+Read the reply, question and evidence. Use the same `--task <id>` to develop useful
+new ideas, answer questions, introduce evidence or resolve disagreement. Saved
+completed exchanges accompany each fresh native session; this does not take over
+an existing desktop conversation.
 
 The request file is the evidence packet. Reference relevant checkout files by
 path/line; inline necessary outside excerpts with their source and capture
@@ -51,7 +54,8 @@ invariants before another local correction. When necessary evidence is
 inaccessible or stale, identify what is missing and qualify the conclusion;
 distinguish a suspected risk from a demonstrated defect.
 
-Stop at a supported recommendation, explicit tradeoff or precise next test.
+Finish when the owner's purpose is served: ideas worth pursuing, a supported
+recommendation, explicit tradeoff or precise next test.
 Do not force consensus or fill a review-round quota. Each task permits at most
 four peer calls, and peers cannot launch nested partners. `status --task <id>`
 recovers private saved results. Large requests or accumulated discussion can hit

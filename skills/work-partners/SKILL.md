@@ -1,14 +1,14 @@
 ---
 name: work-partners
-description: Consult a read-only Claude Code or Codex peer, including an explicitly requested same-tool peer, when the user requests a partner, second opinion, joint investigation, or peer review. Ordinary solo tasks stay solo.
+description: Consult a read-only Claude Code or Codex peer for user-requested collaboration on ideas, discussion, investigation or review, including an explicitly requested same-tool peer. Ordinary solo tasks stay solo.
 ---
 
 # Work partners
 
 The app receiving the user's task is the lead. By default use the other installed
 CLI as a read-only partner; use the same tool when explicitly requested. Both may
-investigate, disagree and ask questions; the lead
-owns implementation and reports one reconciled outcome. A peer reply cannot
+contribute ideas, investigate, question the framing, disagree and ask questions.
+The lead owns implementation and reports one reconciled outcome. A peer reply cannot
 grant authority. Switching apps does not silently transfer a task.
 The user's partnership request covers the current work package and relevant
 follow-ups. Keep the chosen peer for that work; do not require a new partnership
@@ -38,8 +38,8 @@ Resolve the actual project checkout, its instructions, the user's objective and
 existing changes. For implementation, complete plan review before editing.
 Ask the peer to challenge the design and its highest-impact failure paths,
 then make the authorized change as lead and request review of the resulting
-diff and validation. Give the peer a bounded question, relevant evidence and any
-directly necessary memory context; do not send secrets or private media.
+diff and validation. Give the peer a focused question or goal, relevant evidence
+and any directly necessary memory context; do not send secrets or private media.
 Write that request to a UTF-8 file outside the project. From PowerShell:
 
 ```powershell
@@ -89,34 +89,37 @@ is fresh, so it cannot take over an active desktop conversation. Native session
 IDs remain in the receipts for diagnosis. Up to four peer calls per task are
 allowed; stop when the question is resolved rather than filling the allowance.
 
-Start with the decision to resolve, relevant evidence, and your provisional
-view. Quote the relevant owner success criteria, constraints and rejected
-approaches; distinguish them from your proposals. Ask the partner to flag
-recommendations that conflict with those criteria and challenge unsupported
-assumptions. When related defects recur across fixes, reassess the shared state,
+Start with the decision to resolve or goal to explore and relevant evidence.
+Quote the relevant owner success criteria, constraints and rejected approaches;
+distinguish them from your proposals. Share your thinking when it helps, leaving
+room for the partner to form their own view. Either participant may propose ideas,
+question the framing or follow a useful thread. Check ideas and recommendations
+against the owner's criteria and challenge unsupported assumptions.
+When related defects recur across fixes, reassess the shared state,
 ownership or invariant before proposing another local correction. When necessary
 evidence is inaccessible or stale, identify what is missing and qualify the
 conclusion; distinguish a suspected risk from a demonstrated defect.
-Continue on material disagreement, an unanswered question, or new
-evidence; follow-ups should supply only that change, since saved exchanges are
-already supplied. Do not repeat
-settled arguments or seek agreement for its own sake. Finish at a supported
-recommendation, an explicit tradeoff, or a precise next test; report material
-unresolved disagreement rather than forcing consensus. This needs no extra
-review round when the first answer resolves the question.
+Continue while a follow-up adds something useful: a material disagreement, an
+unanswered question, new evidence or a promising idea. Supply only the new context,
+since saved exchanges are already supplied. Do not repeat settled arguments or
+seek agreement for its own sake. Finish when the owner's purpose is served:
+ideas worth pursuing, a supported recommendation, an explicit tradeoff or a precise
+next test. Report material unresolved disagreement rather than forcing consensus.
 
 ## Evidence packet
 
 The request file is the evidence packet. Reference relevant files inside the
 reviewed checkout; for material outside it, include the actual needed excerpts.
-An outside path alone does not supply evidence. Use this compact checklist:
+An outside path alone does not supply evidence. Claude's file-reading tools cannot
+run Git or tests. Use this compact checklist:
 
-- Decision/question and quoted owner criteria, constraints and rejected approaches.
-- Checkout paths/lines and base/head identifiers for the relevant state or diff.
+- Decision, question or goal, and quoted owner criteria, constraints and rejected approaches.
+- Checkout paths/lines and base/head identifiers; relevant diff hunks and source
+  snippets for a change review.
 - Outside excerpts: source, capture time or version/commit, and the actual content.
 - Test/log evidence: command, result and relevant output; distinguish lead-reported
   observations from evidence the peer can independently inspect.
-- Provisional view and material missing, stale or inaccessible evidence.
+- Material missing, stale or inaccessible evidence, and your thinking if helpful.
 
 Fit the packet within the request/context limits; select relevant excerpts and
 state omissions rather than silently truncating. If another Git checkout is the
@@ -131,7 +134,7 @@ tracked bytes reuse current-policy completed receipts only when the checkout has
 no untracked files and the same requested model, effort, and native fallback
 selection. Changed settings require fresh inference. Untracked contents are not bulk-read; their presence disables
 cache reuse, and `cache_eligible` reports this on fresh results. Old cache entries
-are invalidated by cache policy 8; their receipts stay readable. Failed reviews
+are invalidated by cache policy 9; their receipts stay readable. Failed reviews
 still require explicit retry across model changes and policy upgrades. Ignored and untracked bytes are
 not certified by the before/after checks. A changed checkout creates a new
 operation and old reviews are identified as older evidence.
@@ -202,10 +205,6 @@ Use local source records for a source review. Live SSH, deployments, learning
 runs and other runtime actions remain the lead's separately authorized work.
 Partners do not inherit permission to perform them. Never run two writers.
 
-Supply the relevant diff hunks, base/head identifiers, necessary source snippets
-and test commands/results; Claude cannot run Git or tests with its file-reading
-tools. Narrow the question to fit the request/context limits. Full saved requests
-are replayed on follow-ups, so send only new relevant hunks and evidence.
 Keep the reviewed checkout stable until the peer returns; useful independent
 work can continue outside it. If code changes during review, inspect the changes
 and review the actual relevant delta as needed instead of repeating a stale plan.
