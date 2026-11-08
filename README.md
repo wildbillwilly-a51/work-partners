@@ -6,6 +6,9 @@ read-only and contributes ideas, evidence, questions and challenges. Work toward
 useful ideas, a conclusion, tradeoff or next test. The default is the other tool;
 an explicitly requested same-tool peer is also supported.
 
+To discuss a project with ordinary ChatGPT from Codex desktop, install the
+optional [ChatGPT companion](chatgpt-companion/COMPANION.md).
+
 Source-available, free to install and use on your own computers. Redistribution,
 commercial distribution and publication of modified versions require written
 permission. This is not an open-source license. See [NOTICE](NOTICE).
