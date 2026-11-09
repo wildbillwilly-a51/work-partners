@@ -16,6 +16,8 @@ PENDING=('prepared','dispatch_intent','awaiting_reply')
 # This is a code-owned allowlist, never populated from CLI flags/native claims.
 REJECTION_CONTRACTS={}
 NO_NATIVE_RESULT=object()
+# Bits & Bolts Remote adds this text in src/app/controller.ts in openai/mcp-extensions.
+BITS_BOLTS_PREFIX='Create a new CAD part with Bits & Bolts: '
 digest=lambda text:hashlib.sha256(text.encode('utf-8')).hexdigest()
 
 class ConsultationError(Exception): pass
@@ -73,6 +75,70 @@ def verified_thread(payload,expected=None):
     if expected and thread['id']!=expected:raise ConsultationError('wrong_thread_read')
     return result
 
+def verify_starter(result, expected):
+    expected = expected.replace('\r\n', '\n').strip()
+    if not expected or len(expected) > 20000 or expected.startswith('Work Partners consultation '):
+        raise ConsultationError('invalid_expected_starter')
+
+    page = result.get('page')
+    if not isinstance(page, dict) or page.get('hasMore') is not False or page.get('nextCursor') is not None:
+        raise ConsultationError('complete_native_history_required_for_starter')
+
+    turns = result.get('turns', [])
+    if not isinstance(turns, list) or len(turns) != 1 or not isinstance(turns[0], dict):
+        raise ConsultationError('one_native_starter_turn_required')
+    turn = turns[0]
+    items = turn.get('items', [])
+    if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
+        raise ConsultationError('invalid_native_starter_items')
+    messages = [item for item in items if item.get('type') == 'userMessage']
+    if not messages:
+        raise ConsultationError('starter_missing_from_native_read')
+    turn_id = turn.get('id')
+    if len(messages) != 1 or not isinstance(turn_id, str) or not turn_id:
+        raise ConsultationError('one_native_starter_message_required')
+
+    message = messages[0]
+    parts = message.get('content', [])
+    if not isinstance(parts, list) or message.get('truncated') or any(
+        not isinstance(part, dict) or part.get('type') != 'text' or part.get('truncated')
+        or not isinstance(part.get('text'), str)
+        for part in parts
+    ):
+        raise ConsultationError('complete_native_starter_text_required')
+    actual = ''.join(part['text'] for part in parts).replace('\r\n', '\n').strip()
+    if actual != expected:
+        raise ConsultationError('native_starter_does_not_match')
+    return {'starter_verified': True, 'starter_sha256': digest(actual), 'starter_turn_id': turn_id}
+
+def verify_created_chat(result, attempt, browser):
+    thread = result['thread']
+    created = thread.get('createdAt')
+    if type(created) not in (int, float) or not attempt['started_at'] - 2 <= created <= time.time() + 300:
+        raise ConsultationError('new_chat_creation_time_not_verified')
+    status = thread.get('status')
+    if not isinstance(status, dict) or status.get('type') != 'idle':
+        raise ConsultationError('created_chat_not_idle')
+    expected = BITS_BOLTS_PREFIX + attempt['prompt']
+    try:
+        proof = verify_starter(result, expected)
+    except ConsultationError as error:
+        # A visible native mismatch, incomplete page, or later turn cannot use this path.
+        if str(error) != 'starter_missing_from_native_read' or browser is None:
+            raise
+    else:
+        return {'verification': 'native_starter', **proof}
+
+    turn = result['turns'][0]
+    items = turn.get('items', [])
+    if (turn.get('status') != 'completed' or turn.get('error') or not items
+            or any(item.get('type') != 'agentMessage' for item in items)):
+        raise ConsultationError('browser_verification_requires_completed_opening_reply')
+    url = 'https://chatgpt.com/c/' + thread['id']
+    if not isinstance(browser, dict) or browser.get('chat_url') != url or browser.get('user_text') != expected:
+        raise ConsultationError('browser_chat_url_or_starter_does_not_match')
+    return {'verification': 'browser_starter', 'starter_sha256': digest(expected)}
+
 def root_path(value):
     path=Path(value).expanduser()
     if not path.is_absolute() or not path.is_dir():raise ConsultationError('absolute_existing_project_required')
@@ -88,21 +154,114 @@ class Receipts:
           CREATE TABLE IF NOT EXISTS consultations(id TEXT PRIMARY KEY,project TEXT NOT NULL,thread_id TEXT NOT NULL,
             state TEXT NOT NULL,payload TEXT NOT NULL);
           CREATE UNIQUE INDEX IF NOT EXISTS one_pending_per_chat ON consultations(thread_id)
-            WHERE state IN ('prepared','dispatch_intent','awaiting_reply');""")
+            WHERE state IN ('prepared','dispatch_intent','awaiting_reply');
+          CREATE TABLE IF NOT EXISTS chat_creations(
+            id TEXT PRIMARY KEY, project TEXT NOT NULL, state TEXT NOT NULL, payload TEXT NOT NULL);
+          CREATE UNIQUE INDEX IF NOT EXISTS one_pending_creation_per_project ON chat_creations(project)
+            WHERE state='pending';""")
     def close(self):self.db.close()
     def protect_project(self,project):
         if self.directory.is_relative_to(Path(project)):raise ConsultationError('receipts_must_be_outside_project')
     def binding(self,project):
         return self.db.execute('SELECT * FROM bindings WHERE scope=?',(project,)).fetchone() or self.db.execute("SELECT * FROM bindings WHERE scope='*'").fetchone()
-    def bind(self,payload,project=None):
+    def _save_binding(self, project, thread):
+        self.db.execute('INSERT OR REPLACE INTO bindings VALUES(?,?,?)',
+                        (project, thread['id'], str(thread.get('title', ''))))
+
+    def bind(self,payload,project=None,*,expected_starter=None):
         result=verified_thread(payload);t=result['thread'];scope=root_path(project) if project else '*'
+        starter = {}
+        if expected_starter is not None:
+            if not project:
+                raise ConsultationError('project_required_for_starter_verification')
+            starter = verify_starter(result, expected_starter)
         self.db.execute('BEGIN IMMEDIATE')
         try:
-            self.db.execute('INSERT OR REPLACE INTO bindings VALUES(?,?,?)',(scope,t['id'],str(t.get('title',''))));self.db.commit()
+            self._save_binding(scope,t);self.db.commit()
         except Exception:self.db.rollback();raise
         return {'bound':True,'scope':scope,'thread_id':t['id'],'title':t.get('title'),'chat_url':'https://chatgpt.com/c/'+t['id'],
                 'message':'Destination selected. Existing consultations are preserved; setup sends nothing.',
-                'status':self.project_status(project) if project else None}
+                'status':self.project_status(project) if project else None,**starter}
+
+    def start_creation(self, project):
+        project = root_path(project)
+        self.protect_project(project)
+        ident = str(uuid.uuid4())
+        marker = 'WP-CREATE-' + ident
+        prompt = f'{marker}. This is a Work Partners setup message. Reply OK. Do not create a CAD part or call tools.'
+        self.db.execute('BEGIN IMMEDIATE')
+        try:
+            previous = self.binding(project)
+            attempt = {'creation_id': ident, 'project': project, 'state': 'pending', 'marker': marker,
+                       'prompt': prompt, 'started_at': time.time(),
+                       'previous_binding': dict(previous) if previous else None}
+            self.db.execute('INSERT INTO chat_creations VALUES(?,?,?,?)',
+                            (ident, project, 'pending', json.dumps(attempt)))
+            self.db.commit()
+        except sqlite3.IntegrityError:
+            self.db.rollback()
+            raise ConsultationError('creation_pending_recover_or_abandon_without_resending') from None
+        except Exception:
+            self.db.rollback()
+            raise
+        return {'creation_id': ident, 'marker': marker, 'plugin_prompt': prompt, 'state': 'pending'}
+
+    def _creation(self, ident):
+        row = self.db.execute('SELECT payload FROM chat_creations WHERE id=?', (ident,)).fetchone()
+        if row is None:
+            raise ConsultationError('unknown_chat_creation')
+        return json.loads(row['payload'])
+
+    def _update_creation(self, attempt):
+        self.db.execute('UPDATE chat_creations SET state=?,payload=? WHERE id=?',
+                        (attempt['state'], json.dumps(attempt), attempt['creation_id']))
+
+    def recover_creation(self, ident, payload, browser=None):
+        result = verified_thread(payload)
+        thread = result['thread']
+        self.db.execute('BEGIN IMMEDIATE')
+        try:
+            attempt = self._creation(ident)
+            if attempt['state'] == 'bound':
+                if attempt['thread_id'] != thread['id']:
+                    raise ConsultationError('wrong_thread_read')
+            elif attempt['state'] == 'pending':
+                proof = verify_created_chat(result, attempt, browser)
+                project = attempt['project']
+                previous = self.binding(project)
+                if (dict(previous) if previous else None) != attempt['previous_binding']:
+                    raise ConsultationError('project_binding_changed_during_creation')
+                if self.db.execute('SELECT 1 FROM bindings WHERE thread_id=?', (thread['id'],)).fetchone():
+                    raise ConsultationError('created_chat_already_bound')
+                self._save_binding(project, thread)
+                attempt.update(state='bound', thread_id=thread['id'], title=thread.get('title'),
+                               chat_url='https://chatgpt.com/c/' + thread['id'], **proof)
+                self._update_creation(attempt)
+            else:
+                raise ConsultationError('abandoned_creation_cannot_bind')
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
+        return {k: v for k, v in attempt.items() if k not in ('prompt', 'previous_binding')}
+
+    def abandon_creation(self, ident, reason):
+        if not reason.strip() or len(reason) > 2000:
+            raise ConsultationError('abandon_reason_required_max_2000_characters')
+        self.db.execute('BEGIN IMMEDIATE')
+        try:
+            attempt = self._creation(ident)
+            if attempt['state'] == 'bound':
+                raise ConsultationError('bound_creation_keep_saved_destination')
+            if attempt['state'] == 'pending':
+                attempt.update(state='abandoned', abandon_reason=reason.strip())
+                self._update_creation(attempt)
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
+        return {'creation_id': ident, 'state': attempt['state'], 'marker': attempt['marker']}
+
     def project_status(self,project):
         project=root_path(project);binding=self.binding(project)
         rows=self.db.execute('SELECT payload FROM consultations WHERE project=? ORDER BY rowid DESC LIMIT 10',(project,)).fetchall()
@@ -112,12 +271,20 @@ class Receipts:
                 'unresolved':[self.summary(json.loads(row[0]),include_reply=False) for row in unresolved],
                 'recent':[self.summary(json.loads(row[0]),include_reply=False) for row in rows],
                 'message':'Select an existing ordinary ChatGPT chat with setup. No message has been sent by this command.'}
+        creation = self.db.execute('SELECT payload FROM chat_creations WHERE project=? ORDER BY rowid DESC LIMIT 1',
+                                   (project,)).fetchone()
         if binding:
             pending=self.db.execute("SELECT payload FROM consultations WHERE thread_id=? AND state IN ('prepared','dispatch_intent','awaiting_reply')",(binding['thread_id'],)).fetchone()
             result.update(state='destination_in_use' if pending else 'ready',
                           destination={'thread_id':binding['thread_id'],'title':binding['title'],'scope':binding['scope'],'chat_url':'https://chatgpt.com/c/'+binding['thread_id']},
                           destination_pending=self.summary(json.loads(pending[0]),include_reply=False) if pending else None,
                           message='Recover the pending consultation or select another intended chat; do not resend.' if pending else 'Ready to prepare a consultation for this destination.')
+        if creation:
+            attempt = json.loads(creation['payload'])
+            result['chat_creation'] = {k: v for k, v in attempt.items()
+                                       if k not in ('prompt', 'previous_binding')}
+            if attempt['state'] == 'pending':
+                result['message'] = 'Recover the pending chat creation or explicitly abandon it. Do not click Create again.'
         return result
     def prepare(self,project,question,context=''):
         project=root_path(project);self.protect_project(project)
@@ -309,6 +476,7 @@ def main():
     sub=parser.add_subparsers(dest='command',required=True)
     for name in ['setup','bind']:
         bind=sub.add_parser(name);bind.add_argument('--native-json',type=Path,required=True);bind.add_argument('--project')
+        bind.add_argument('--expect-starter-file',type=Path)
     prepare=sub.add_parser('prepare');prepare.add_argument('--project',required=True);prepare.add_argument('--question-file',type=Path,required=True);prepare.add_argument('--context-file',type=Path)
     for name in ['dispatch','collect','recover']:
         command=sub.add_parser(name);command.add_argument('--request',required=True);command.add_argument('--native-json',type=Path,required=True)
@@ -321,9 +489,28 @@ def main():
     status=sub.add_parser('status');selection=status.add_mutually_exclusive_group(required=True);selection.add_argument('--request');selection.add_argument('--project')
     command=sub.add_parser('discard');command.add_argument('--request',required=True)
     command=sub.add_parser('abandon');command.add_argument('--request',required=True);command.add_argument('--reason',required=True)
+    command = sub.add_parser('create-start')
+    command.add_argument('--project', required=True)
+    command = sub.add_parser('create-recover')
+    command.add_argument('--creation', required=True)
+    command.add_argument('--native-json', type=Path, required=True)
+    command.add_argument('--browser-json', type=Path)
+    command = sub.add_parser('create-abandon')
+    command.add_argument('--creation', required=True)
+    command.add_argument('--reason', required=True)
     args=parser.parse_args();store=Receipts(args.data_dir)
     try:
-        if args.command in ('bind','setup'):result=store.bind(read_json(args.native_json),args.project)
+        if args.command in ('bind','setup'):
+            expected = None
+            if args.expect_starter_file is not None:
+                try:
+                    with args.expect_starter_file.open(encoding='utf-8-sig') as starter_file:
+                        expected = starter_file.read(20001)
+                except (OSError, UnicodeError):
+                    raise ConsultationError('expected_starter_file_unreadable') from None
+                if len(expected) > 20000:
+                    raise ConsultationError('invalid_expected_starter')
+            result=store.bind(read_json(args.native_json),args.project,expected_starter=expected)
         elif args.command=='prepare':result=store.prepare(args.project,args.question_file.read_text(encoding='utf-8-sig'),args.context_file.read_text(encoding='utf-8-sig') if args.context_file else '')
         elif args.command=='dispatch':result=store.dispatch(args.request,read_json(args.native_json))
         elif args.command in ('collect','recover'):result=store.collect(args.request,read_json(args.native_json))
@@ -334,6 +521,13 @@ def main():
         elif args.command=='audit':result=store.audit(args.request)
         elif args.command=='discard':result=store.discard(args.request)
         elif args.command=='abandon':result=store.abandon(args.request,args.reason)
+        elif args.command == 'create-start':
+            result = store.start_creation(args.project)
+        elif args.command == 'create-recover':
+            browser = read_json(args.browser_json) if args.browser_json else None
+            result = store.recover_creation(args.creation, read_json(args.native_json), browser)
+        elif args.command == 'create-abandon':
+            result = store.abandon_creation(args.creation, args.reason)
         else:result=store.project_status(args.project) if args.project else store.summary(store.job(args.request))
         print(json.dumps(result,ensure_ascii=False,indent=2));return 0
     except ConsultationError as error:

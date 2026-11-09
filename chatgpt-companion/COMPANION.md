@@ -36,6 +36,24 @@ Codex its link. Codex's native new-task tool does not create ordinary ChatGPT ch
 The agent verifies the chat kind/title/link and binds it for the current project.
 Then say **“Involve ChatGPT in discussing …”**. No manual message copying is needed.
 
+## Create a fresh chat from Codex
+
+In Codex desktop say **“Create a new ordinary ChatGPT chat for this project.”**
+This optional workflow uses a signed-in ChatGPT Work browser session and the
+connected Bits & Bolts Remote demo. Codex uses the demo's **New chat** option
+with a synthetic starter. The opening message has a CAD demo prefix and
+ChatGPT chooses the title. Sending the demo's launch prompt creates a separate
+Work task. Any project context is sent later through native messaging.
+
+The companion saves a pending creation before submission. Codex finds the new
+chat by verifying the starter and its ordinary ChatGPT identity, then binds it
+to the project. If native readback omits the opening user message, Codex verifies
+the visible opening user message at the same chat URL and records that
+observation locally. If interrupted, ask
+Codex to recover the pending creation. Recovery uses the saved marker and
+leaves the existing project binding in place until verification succeeds.
+This is an interactive Codex workflow and depends on the demo being available.
+
 ## Status and recovery
 
 Ask **“Show this project's ChatGPT status”** or **“Recover the pending ChatGPT
@@ -66,6 +84,10 @@ Commands below are for the agent; use the absolute installed helper path:
 ```text
 python chatgpt.py status --project ABSOLUTE_PROJECT
 python chatgpt.py setup --project ABSOLUTE_PROJECT --native-json READ_JSON
+python chatgpt.py create-start --project ABSOLUTE_PROJECT
+python chatgpt.py create-recover --creation ID --native-json READ_JSON
+# If native omits the starter, add --browser-json OBSERVED_BROWSER_JSON.
+python chatgpt.py create-abandon --creation ID --reason REASON
 python chatgpt.py prepare --project ABSOLUTE_PROJECT --question-file QUESTION
 python chatgpt.py dispatch --request ID --native-json CURRENT_READ_JSON
 # Save the entire dispatch output as DISPATCH_JSON, then send its arguments ONCE.
@@ -76,6 +98,14 @@ python chatgpt.py recover --request ID --native-json LATEST_READ_JSON
 python chatgpt.py status --request ID
 python chatgpt.py abandon --request ID --reason REASON
 ```
+
+For a fresh destination discovered by its starter, add
+`--expect-starter-file FILE` to project setup. Provide the expected full native
+text, including any known plugin mention. Setup requires complete native history
+with exactly one turn and one matching user message. A missing starter or
+mismatch leaves the binding intact. If you are using this guarded setup and the
+opening message is absent from native history, use ordinary setup after the user
+identifies the destination.
 
 `bind`/`collect` remain compatibility aliases for setup/recover. `discard` ends an
 unsent prepared request. `sent` remains an audit alias; without `--dispatch-json`
@@ -93,8 +123,8 @@ included in the package. The helper's state is local to each installation/store.
 
 Replies currently need the final correlation footer and fit within the host's
 native read limit (tested at 20,000 characters per item). Incomplete output stays
-incomplete. Images, automatic chat creation and other client transports are not
-provided. Read-only consultation instructions do not reconfigure connected apps
+incomplete. Consultations use native text messaging. Read-only consultation
+instructions do not reconfigure connected apps
 or create a separate ChatGPT tool sandbox.
 
 To make a standalone four-file ZIP, run the installer with `--bundle`.

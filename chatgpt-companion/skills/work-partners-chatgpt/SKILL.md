@@ -1,6 +1,6 @@
 ---
 name: work-partners-chatgpt
-description: Involve ordinary ChatGPT as a thinking partner when the user says “involve ChatGPT,” “ask ChatGPT,” or requests ChatGPT collaboration. Also set up, show status or recover this private consultation route. Codex desktop native messaging; separate from the public Codex/Claude CLI runner.
+description: Involve ordinary ChatGPT as a thinking partner, create or bind a project chat, show status, or recover a pending consultation. Uses Codex desktop native messaging, separate from the public Codex/Claude CLI runner.
 ---
 
 # Involve ChatGPT
@@ -18,8 +18,8 @@ evidence is missing and report any uncertainty that matters to the result.
 
 This route requires native `read_thread` and `send_message_to_thread` tools.
 Inspect availability first. If absent, explain that this host cannot send via
-this route. Do not substitute Claude, a model API, browser automation or the
-public runner. The Python helper stores state; it cannot send or provide native
+this route. Use the browser only for the chat creation flow below. The Python
+helper stores state and cannot send messages or provide native
 tools. No private MCP service is required; selected context also works.
 User-started ChatGPT discussions through the separate context plugin remain
 independent. Do not alter connected apps or claim enforced CLI tool isolation.
@@ -42,11 +42,55 @@ length or images.
    binding; a preexisting default remains a fallback. Tell the user the selected
    destination when first selecting or changing it; ordinary requested consultation
    does not need an extra permission prompt.
+   When discovering a fresh chat by its starter, add `--expect-starter-file FILE`
+   and pass `--project`. Use complete native history with exactly one turn and
+   one user message. The file contains the expected full native text, including
+   any known rendered plugin mention. If native readback omits the starter, ask
+   the user to identify the destination explicitly and use ordinary setup.
 3. If there is no suitable chat, the user can open an ordinary ChatGPT chat once
    and provide its link. Do not use a native new-task tool that only creates Codex
    chats. Setup sends nothing. Rebinding preserves all old receipts, including
    unresolved ones. A busy destination can be replaced by another intended chat;
    never discard another project's request to make room.
+
+## Create a fresh ordinary ChatGPT chat
+
+Use this optional route when the user asks Codex to create an ordinary ChatGPT
+chat for the project. It requires an active Codex desktop turn, native tools,
+browser control in a signed-in ChatGPT Work session, and the connected Bits &
+Bolts Remote demo. Use only the synthetic starter from the helper. Send project
+context later through native consultation.
+
+1. Check project status. If a creation is pending, skip to step 3 and leave the
+   form alone. For a new attempt, open the Bits & Bolts Remote catalog entry in
+   Work and choose
+   **Open the Parts Library**. If Work fills the composer, send that launch
+   prompt once. Choose **Enter full view**, then **New part**. Confirm that
+   **Conversation** is set to **New chat** and **Review in chat before sending**
+   is unchecked. If the viewer fails to load, use its **Try again** control
+   before starting the attempt. A short list of current sidebar links can help
+   narrow discovery after submission.
+2. Run `create-start --project ROOT` when the form is ready. Fill **What do
+   you want to design?** with the returned `plugin_prompt`, then click
+   **Create** once. If the host asks for approval, let the user handle it.
+   Treat an uncertain click as submitted.
+3. Search for the saved marker using native history or newly visible sidebar
+   links. The title alone is insufficient. If an interruption happened before
+   the click and you can establish no submission occurred, close the stale
+   form and abandon that attempt before starting a fresh one. Read the
+   candidate chat natively and save the actual result. Run
+   `create-recover --creation ID --native-json READ_JSON`. If native readback
+   omits the starter, verify the full text of the opening user-message bubble
+   in the browser
+   on the exact candidate chat URL. Retry recovery with
+   `--browser-json BROWSER_JSON` containing the observed `chat_url` and
+   `user_text`. The helper requires an idle, newly created ordinary chat,
+   complete first-turn history and matching evidence. A visible native starter
+   mismatch cannot use browser fallback.
+4. Report the bound chat link. Continue with native consultation if requested.
+   If the user wants to stop looking, use
+   `create-abandon --creation ID --reason REASON`. This ends local recovery
+   and leaves any chat that may have been created available in ChatGPT history.
 
 ## Consultation
 
