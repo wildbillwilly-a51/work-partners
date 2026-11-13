@@ -15,6 +15,20 @@ parsing, retry gates, locks, tracked changes, timeout termination, call bounds,
 CLI restrictions, prerequisite checks and installation preservation/custom roots.
 They make no model request or sign-in change. They do not prove vendor behavior,
 account access or complete sandbox enforcement.
+
+On Windows, run the launcher regressions separately:
+
+```powershell
+python -B -m unittest discover -s tests -p test_guided_launcher.py
+```
+
+Before releasing the ChatGPT launcher, start from a clean Windows user account
+once with Codex desktop and once with Claude Code as the installing agent.
+Follow the [agent workflow](../codex-launcher/PORTABLE.md). The user should
+only perform the account actions and paste the key into the masked window.
+Test a rejected paste, retry, and key replacement. Verify an actual regular
+ChatGPT handoff, close setup, sign out and back in, and verify a fresh
+handoff from regular ChatGPT. Exercise the packaged Codex app specifically.
 Explicit-peer cases also cover saved-peer follow-ups, legacy binding, peer mismatch
 without receipt mutation, preflight failures, actual-peer cooldowns/call limits,
 ask/doctor CLI dispatch and checking one peer without requiring the other CLI.

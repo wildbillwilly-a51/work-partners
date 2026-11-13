@@ -313,7 +313,7 @@ class Receipts:
         if not row:raise ConsultationError('unknown_consultation')
         return json.loads(row['payload'])
     def summary(self,job,include_prompt=False,include_reply=True):
-        keys=['request_id','project','thread_id','chat_title','state','native_turn_id','waiting_for','reply_sha256','native_reply_sha256','abandoned_at','abandon_reason']
+        keys=['request_id','project','thread_id','chat_title','state','native_turn_id','waiting_for','reply_sha256','native_reply_sha256','abandoned_at','abandon_reason','return_detail']
         if include_reply:keys.append('reply')
         result={k:job[k] for k in keys if k in job};result['chat_url']='https://chatgpt.com/c/'+job['thread_id']
         events=job.get('send_outcomes',[])
@@ -328,6 +328,7 @@ class Receipts:
         if conflict:action='Conflicting delivery evidence retained. Inspect the send audit and matching turn; never replay this request.'
         elif job['state']=='prepared':action='Read the destination and dispatch once, or discard this unsent request.'
         elif job['state']=='complete':action='Use the saved reply. No resend is needed.'
+        elif job['state']=='returned_without_reply':action='The outcome was returned to Codex. Start a new request only for new work.'
         elif job['state']=='rejected':action='Verified pre-delivery rejection retained. This request cannot be dispatched again; any later consultation is a new deliberate request.'
         elif job['state']=='discarded':action='Unsent local request discarded. A new consultation can be prepared.'
         elif job['state']=='abandoned':action='Local waiting ended. Nothing was cancelled in ChatGPT; never replay this request. A late reply can still be recovered.'
@@ -345,6 +346,12 @@ class Receipts:
             read=verified_thread(payload,job['thread_id'])
             if read['thread'].get('status',{}).get('type')!='idle':raise ConsultationError('chat_busy_wait_without_sending')
             job['state']='dispatch_intent';job['dispatch_intent_at']=time.time();job['dispatch_id']=str(uuid.uuid4())
+            try:
+                origin=str(uuid.UUID(os.environ.get('CODEX_THREAD_ID', '')))
+            except ValueError:
+                origin=None
+            if origin and origin != job['thread_id']:
+                job['origin_thread']=origin
             job['dispatch_arguments_sha256']=digest(canonical({'threadId':job['thread_id'],'prompt':job['prompt']}))
             self.update(job);self.db.commit()
         except Exception:self.db.rollback();raise
@@ -414,7 +421,7 @@ class Receipts:
         self.db.execute('BEGIN IMMEDIATE')
         try:
             job=self.job(ident)
-            if job['state']=='complete':self.db.commit();return self.summary(job)
+            if job['state'] in ('complete','returned_without_reply'):self.db.commit();return self.summary(job)
             if job['state']=='discarded':raise ConsultationError('consultation_was_discarded')
             read=verified_thread(payload,job['thread_id']);matches=[]
             for turn in read.get('turns',[]):

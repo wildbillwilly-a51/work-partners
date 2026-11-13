@@ -1,4 +1,6 @@
-"""Portable Windows tunnel runner; credentials are resolved at start, never saved."""
+"""Windows tunnel runner, with portable and agent-managed credential sources."""
+
+import base64
 import contextlib
 import hashlib
 from http.client import HTTPConnection, HTTPException
@@ -58,6 +60,13 @@ def validate(config_path):
             raise SetupError('absolute_config_paths_required')
     state = Path(config['stateDir']).resolve()
     root = Path(config['projectRoot']).resolve()
+    guided = config.get('guided', {})
+    if guided:
+        home = Path(config_path).resolve().parent
+        if (config.get('workspaceRoots') != [] or config.get('legacyTools') is not False
+                or len(config.get('projects', [])) != 1 or state != home / 'state'
+                or root != home / 'app'):
+            raise SetupError('guided_launcher_scope_changed')
     exposed = [root, *(Path(p).resolve() for p in config.get('workspaceRoots',[str(root.parent)])), *(Path(p['path']).resolve() for p in config.get('projects',[]))]
     if any(state.is_relative_to(p) for p in exposed):
         raise SetupError('state_must_be_outside_projects')
@@ -65,13 +74,13 @@ def validate(config_path):
     expected = config.get('tunnelSha256',TESTED_CLIENT_SHA256)
     if not re.fullmatch(r'[a-f0-9]{64}',expected) or not binary.is_file() or hashlib.sha256(binary.read_bytes()).hexdigest() != expected:
         raise SetupError('tunnel_binary_hash_mismatch')
-    node = shutil.which('node')
+    node = guided.get('node') or shutil.which('node')
     if not node:
         raise SetupError('node_24_required')
     version = subprocess.run([node,'--version'],capture_output=True,text=True,timeout=10,creationflags=subprocess.CREATE_NO_WINDOW)
     if version.returncode or int(version.stdout.strip().lstrip('v').split('.')[0]) < 24:
         raise SetupError('node_24_required')
-    if not shutil.which('git'):
+    if not (Path(guided['git']).is_file() if guided else shutil.which('git')):
         raise SetupError('git_required')
     state.mkdir(parents=True,exist_ok=True)
     return config,state,binary,node
@@ -85,9 +94,25 @@ def can_prompt():
     except (OSError,ValueError,AttributeError,ctypes.ArgumentError):
         return False
 
-def credential(config,prompt=False):
+def credential_record(config):
+    try:
+        return read_json(Path(config['stateDir']) / 'credential.json')
+    except FileNotFoundError:
+        raise SetupError('tunnel_key_required') from None
+
+
+def credential(config,prompt=False,record=None):
     command = config.get('credentialCommand')
-    if command:
+    if config.get('guided'):
+        from windows_setup import dpapi
+
+        record = credential_record(config) if record is None else record
+        try:
+            encrypted = base64.b64decode(record['encrypted'], validate=True)
+            secret = dpapi(encrypted, config['guided']['id'], decrypt=True).decode('ascii')
+        except (KeyError, ValueError, SetupError):
+            raise SetupError('saved_tunnel_key_unavailable') from None
+    elif command:
         if not isinstance(command,list) or not all(isinstance(x,str) and x for x in command):
             raise SetupError('invalid_credential_command')
         if any(re.search(r'sk-[A-Za-z0-9_-]{20,}',x) for x in command):
@@ -110,13 +135,17 @@ def credential(config,prompt=False):
         raise SetupError('tunnel_credential_missing_or_invalid')
     return secret
 
-def child_environment(config_path,secret):
+def child_environment(config_path,secret,*,config=None):
     env = {k:v for k,v in os.environ.items() if k.lower() in SAFE_ENV}
+    guided = (config or {}).get('guided')
+    if guided:
+        path_key = next((key for key in env if key.lower() == 'path'), 'PATH')
+        env[path_key] = str(Path(guided['git']).parent) + os.pathsep + env.get(path_key, '')
     env.update(WORK_PARTNERS_TUNNEL_KEY=secret,WORK_PARTNERS_CONTEXT_CONFIG=str(Path(config_path).resolve()))
     return env
 
 @contextlib.contextmanager
-def exclusive(path):
+def exclusive(path, *, busy='already_running_or_installing'):
     path = Path(path)
     path.parent.mkdir(parents=True,exist_ok=True)
     if path.resolve()!=path.absolute(): raise SetupError('lock_path_redirected')
@@ -125,7 +154,7 @@ def exclusive(path):
         try:
             msvcrt.locking(stream.fileno(),msvcrt.LK_NBLCK,1)
         except OSError:
-            raise SetupError('already_running_or_installing') from None
+            raise SetupError(busy) from None
         try:
             yield
         finally:
@@ -153,7 +182,7 @@ def status(config_path):
     value=read_json(path)
     if value.get('state')=='running' and time.time()-value.get('heartbeat',0)>10:
         value['state']='stale_inspect_before_restart'
-    return {k:value[k] for k in ['state','run_id','pid','child_pid','heartbeat'] if k in value}
+    return {k:value[k] for k in ['state','run_id','pid','child_pid','heartbeat','credential_revision','background'] if k in value}
 
 def tunnel_readiness(state, runtime_status):
     if runtime_status['state'] != 'running':
@@ -182,12 +211,13 @@ def request_stop(config_path,timeout=15):
         time.sleep(.2)
     raise SetupError('stop_timeout_no_unverified_process_was_killed')
 
-def run(config_path):
+def run(config_path, *, background=False):
     import threading
     config,state,binary,node=validate(config_path)
     # Shared tunnel lock is compatible with the existing personal prototype.
     global_lock=Path(os.environ['LOCALAPPDATA'])/'WorkPartnersPrivateContext'/'locks'/(config['tunnelId']+'.lock')
-    with exclusive(state/'runtime.lock'),exclusive(global_lock):
+    busy = 'tunnel_in_use_by_another_launcher' if config.get('guided') else 'already_running_or_installing'
+    with exclusive(state/'runtime.lock'),exclusive(global_lock, busy=busy):
         prior=status(config_path)
         if prior.get('state') in ['running','stale_inspect_before_restart']:
             # Never kill or replace an unverified surviving client after a crash.
@@ -196,12 +226,15 @@ def run(config_path):
                 check=subprocess.run(['tasklist','/FI',f'PID eq {pid}','/FO','CSV','/NH'],capture_output=True,text=True,timeout=10,creationflags=subprocess.CREATE_NO_WINDOW)
                 if f'"{binary.name.lower()}"' in check.stdout.lower():
                     raise SetupError('stale_child_requires_inspection')
-        secret=credential(config,prompt=True); env=child_environment(config_path,secret)
+        record = credential_record(config) if config.get('guided') else None
+        secret=credential(config,prompt=True,record=record); env=child_environment(config_path,secret,config=config)
         profile_path=profile(config,state,node); check_client(binary,profile_path,env)
         run_id=uuid.uuid4().hex; child=None; threads=[]; handlers=[]
         try:
             (state/'health.url').unlink(missing_ok=True)
             child=subprocess.Popen([str(binary),'run','--config',str(profile_path),'--health.url-file',str(state/'health.url'),'--pid.file',str(state/'tunnel.pid'),'--mcp.max-concurrent-requests','1','--mcp.stdio-send-initialized-notification'],cwd=HERE,env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,creationflags=subprocess.CREATE_NO_WINDOW)
+            if background:
+                (state/'background-error.json').unlink(missing_ok=True)
             def pump(stream,handler):
                 for line in iter(stream.readline,b''):
                     try:
@@ -215,9 +248,14 @@ def run(config_path):
             for stream,name in [(child.stdout,'stdout'),(child.stderr,'stderr')]:
                 handler=RotatingFileHandler(state/f'tunnel-{name}.log',maxBytes=1024*1024,backupCount=2,encoding='utf-8');handlers.append(handler)
                 thread=threading.Thread(target=pump,args=(stream,handler),daemon=True);thread.start();threads.append(thread)
-            print('Private ChatGPT connection running. Leave this window open; use stop or Ctrl+C.',flush=True)
+            if not record:
+                print('Private ChatGPT connection running. Leave this window open; use stop or Ctrl+C.',flush=True)
             while child.poll() is None:
-                write_json(state/'runtime.json',{'state':'running','run_id':run_id,'pid':os.getpid(),'child_pid':child.pid,'heartbeat':time.time()})
+                heartbeat={'state':'running','run_id':run_id,'pid':os.getpid(),'child_pid':child.pid,'heartbeat':time.time()}
+                if record:
+                    heartbeat['credential_revision'] = record['revision']
+                    heartbeat['background'] = background
+                write_json(state/'runtime.json',heartbeat)
                 stop=state/'stop.request'
                 if stop.exists() and read_json(stop).get('run_id')==run_id:
                     return 0

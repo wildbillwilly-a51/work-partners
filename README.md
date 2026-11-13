@@ -6,10 +6,8 @@ read-only and contributes ideas, evidence, questions and challenges. Work toward
 useful ideas, a conclusion, tradeoff or next test. The default is the other tool;
 an explicitly requested same-tool peer is also supported.
 
-To discuss a project with ordinary ChatGPT from Codex desktop, install the
-optional [ChatGPT companion](chatgpt-companion/COMPANION.md).
-To start a new local Codex chat from regular ChatGPT, set up the optional
-[Codex launcher for Windows](codex-launcher/PORTABLE.md).
+ChatGPT is an optional extra step, never part of the default installation; see
+[Optional: ChatGPT](#optional-chatgpt).
 
 Source-available, free to install and use on your own computers. Redistribution,
 commercial distribution and publication of modified versions require written
@@ -28,9 +26,22 @@ The peer runner requires no server, SDK, private infrastructure or memory connec
 is the acceptance-tested platform. macOS/Linux live operation is unverified.
 Linked installation roots are refused, which can affect POSIX temporary paths.
 
-## Install
+## Install from Codex or Claude Code
 
-Clone or download this repository, then run from its directory on Windows:
+Give either agent the Work Partners repository link or checkout path and say
+**“Install Work Partners on this computer.”** This installs the Claude Code and
+Codex skill, the shared runner and their prerequisites. It does not set up
+ChatGPT.
+
+The installing agent:
+
+1. Checks the requirements above. If Python 3.12+, Git or the peer's CLI is
+   missing, it tells the user what it will install and installs it with the
+   computer's usual package manager (for example `winget` on Windows). The user
+   completes any sign-in to the new CLI; the agent never handles credentials.
+2. Runs the commands below from the checkout and reports the doctor result.
+
+On Windows:
 
 ```powershell
 python -B skills/work-partners/scripts/partner.py doctor --project .
@@ -104,3 +115,14 @@ native CLI account; choose approved projects and context. Runner receipts stay
 under `~/.a51/work-partners/state/`; native CLIs can also keep local transcripts.
 Keep these, sign-ins and private state out of Git. Provider processing follows
 the provider's account terms. See [NOTICE](NOTICE) for usage rights and data flow.
+
+## Optional: ChatGPT
+
+These are separate steps, done only when asked, after the installation above.
+
+- **Discuss a project with ordinary ChatGPT from Codex desktop:** install the
+  [ChatGPT companion](chatgpt-companion/COMPANION.md).
+- **Let regular ChatGPT send work to local Codex (Windows):** ask either agent
+  **“Set up Work Partners so regular ChatGPT can send work to Codex.”** The
+  agent runs the [launcher setup](codex-launcher/PORTABLE.md) and guides the
+  account steps. Guided setup is a preview.

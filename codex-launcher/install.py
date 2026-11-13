@@ -16,8 +16,9 @@ HERE=Path(__file__).resolve().parent
 CONNECTOR_FILES = ('install.py', 'runtime.py', 'manage.py', 'probe.mjs', 'core.mjs',
     'project-access.mjs', 'codex-messages.mjs', 'Send-NativeCodexMessage.ps1',
     'start-codex-chat.py', 'codex_desktop.py', 'server.mjs', 'cli.mjs',
-    'package.json', 'package-lock.json', 'PORTABLE.md')
-EXTRA_FILES = ('supervise_tunnel.py', 'Register-TunnelTask.ps1', 'rmm_actions.py',
+    'broker.mjs', 'broker-workers.mjs', 'tell-chatgpt.mjs', 'rollout.mjs', 'broker_desktop.py',
+    'package.json', 'package-lock.json', 'PORTABLE.md', 'setup.py', 'windows_setup.py')
+EXTRA_FILES = ('supervise_tunnel.py', 'Register-TunnelTask.ps1', 'rmm_actions.py', 'launch-server.mjs',
     'COMPANION.md', 'install_skill.py', 'skills/work-partners-chatgpt/SKILL.md',
     'skills/work-partners-chatgpt/scripts/chatgpt.py')
 FILES = CONNECTOR_FILES + (EXTRA_FILES if (HERE/'COMPANION.md').is_file() else ())
@@ -44,9 +45,10 @@ def dependencies(app):
     result=subprocess.run([node,str(npm_cli),'ci','--ignore-scripts','--no-audit','--no-fund'],cwd=app,capture_output=True,timeout=240,creationflags=subprocess.CREATE_NO_WINDOW)
     if result.returncode: raise SetupError('dependency_install_failed_rerun_install')
 
-def install(home,*,workspaces=(),tunnel_id=None,binary=None,expected=TESTED_CLIENT_SHA256,vault_item=None,credential_command=None,context_thread=None,source=HERE):
+def install(home,*,workspaces=(),tunnel_id=None,binary=None,expected=TESTED_CLIENT_SHA256,vault_item=None,credential_command=None,context_thread=None,source=HERE,guided=None,publish_home=None):
     home=Path(home).resolve(); source=Path(source).resolve(); app=home/'app'; state=home/'state'
-    if home==source or home.is_relative_to(source): raise SetupError('installation_must_be_outside_source')
+    published=Path(publish_home).resolve() if publish_home else home
+    if published==source or published.is_relative_to(source): raise SetupError('installation_must_be_outside_source')
     old_path=home/'installation.json'; config_path=home/'config.json'
     old=read_json(old_path) if old_path.exists() else None
     for path in [app,home/'bin',old_path,config_path]:
@@ -63,15 +65,18 @@ def install(home,*,workspaces=(),tunnel_id=None,binary=None,expected=TESTED_CLIE
         if not (home/'work-partners.cmd').is_file() or digest(home/'work-partners.cmd')!=old['launcher_sha256']:
             raise SetupError('launcher_has_local_edits')
     else:
-        if not workspaces or not tunnel_id: raise SetupError('workspace_and_tunnel_id_required')
+        if not (workspaces or guided) or not tunnel_id: raise SetupError('workspace_and_tunnel_id_required')
         roots=[str(Path(p).resolve()) for p in workspaces]
-        if any(home.is_relative_to(Path(p)) or Path(p).is_relative_to(home) for p in roots):
+        scope = roots if not guided else [guided['project']['path']]
+        if any(published.is_relative_to(Path(p)) or Path(p).is_relative_to(published) for p in scope):
             raise SetupError('installation_must_be_separate_from_workspace')
-        for p in roots:
+        for p in scope:
             if not Path(p).is_dir(): raise SetupError('workspace_not_found')
-        config={'projectRoot':str(app),'stateDir':str(state),'workspaceRoots':roots,'projects':[],
-                'legacyTools':False,'tunnelId':tunnel_id,'tunnelBinary':str(home/'bin/tunnel-client.exe'),
+        config={'projectRoot':str(published/'app'),'stateDir':str(published/'state'),'workspaceRoots':roots,'projects':[],
+                'legacyTools':False,'tunnelId':tunnel_id,'tunnelBinary':str(published/'bin/tunnel-client.exe'),
                 'tunnelSha256':expected,'credentialEnv':'WORK_PARTNERS_TUNNEL_KEY'}
+        if guided:
+            config.update(projects=[guided['project']], guided={k:v for k,v in guided.items() if k!='project'})
         if vault_item: config['credentialCommand']=['bw','get','password',vault_item]
         if credential_command: config['credentialCommand']=credential_command
     if not re.fullmatch(r'tunnel_[A-Za-z0-9]+',config['tunnelId']): raise SetupError('invalid_tunnel_id')
@@ -89,21 +94,32 @@ def install(home,*,workspaces=(),tunnel_id=None,binary=None,expected=TESTED_CLIE
             'enabled': True,
             'creationContextThread': context_thread,
             'command': [str(powershell), '-NoProfile', '-NonInteractive',
-                        '-File', str(app/'Send-NativeCodexMessage.ps1'),
+                        '-File', str(published/'app/Send-NativeCodexMessage.ps1'),
                         '-PythonPath', sys.executable, '-NodePath', node],
         }
+        if guided:
+            config['codexMessaging'].update(
+                nativeStart=True,
+                command=[guided['python'], '-B', str(published/'app/start-codex-chat.py'), guided['node']],
+            )
     selected=Path(binary or (config['tunnelBinary'] if old else shutil.which('tunnel-client') or '')).resolve()
     wanted=config['tunnelSha256'] if old and not binary else expected
     if old and wanted!=config['tunnelSha256']: raise SetupError('existing_binary_configuration_preserved')
     if not re.fullmatch(r'[a-f0-9]{64}',wanted) or not selected.is_file() or digest(selected)!=wanted:
         raise SetupError('provide_verified_tunnel_binary_and_matching_sha256')
     payload={}
-    for name in FILES:
-        path=source/name
+    guided_install = bool(config.get('guided'))
+    for name in CONNECTOR_FILES if guided_install else FILES:
+        # A private checkout also contains a broader MCP server. Guided
+        # handoffs must install the same restricted server as the public build.
+        source_name = ('launch-server.mjs' if guided_install and name == 'server.mjs'
+                       and (source/'COMPANION.md').is_file() else name)
+        path=source/source_name
         if path.resolve()!=path or not path.is_file(): raise SetupError('source_file_missing_or_redirected')
         payload[name]=path.read_bytes()
     # This lock is also held throughout an installed runtime's lifetime.
-    state=Path(config['stateDir']).resolve(); state.mkdir(parents=True,exist_ok=True)
+    state=(Path(config['stateDir']) if old else state).resolve()
+    state.mkdir(parents=True,exist_ok=True)
     with exclusive(state/'runtime.lock'):
         app.mkdir(parents=True,exist_ok=True); (home/'bin').mkdir(exist_ok=True)
         for name,data in payload.items():
@@ -121,7 +137,7 @@ def install(home,*,workspaces=(),tunnel_id=None,binary=None,expected=TESTED_CLIE
         if not old or old.get('lock_sha256')!=lock_hash or not (app/'node_modules/@modelcontextprotocol/sdk/package.json').exists():
             dependencies(app)
         receipt.update(dependencies_ready=True,lock_sha256=lock_hash); write_json(old_path,receipt)
-    return {'installed':str(home),'config':str(config_path),'next':'work-partners.cmd doctor --local-only; then configure a credential and start'}
+    return {'installed':str(published),'config':str(published/'config.json'),'next':'work-partners.cmd doctor --local-only; then configure a credential and start'}
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__); sub=parser.add_subparsers(dest='command',required=True)

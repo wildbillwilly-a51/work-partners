@@ -31,7 +31,7 @@ def main():
                     with tempfile.NamedTemporaryFile(mode='w',encoding='utf-8',suffix='.json',prefix=f'{args.command}-',dir=state,delete=False) as output:
                         json.dump(query,output);argument=Path(output.name)
                     command.append(str(argument))
-                response=subprocess.run(command,cwd=HERE,env=child_environment(path,''),capture_output=True,encoding='utf-8',timeout=60,creationflags=subprocess.CREATE_NO_WINDOW)
+                response=subprocess.run(command,cwd=HERE,env=child_environment(path,'',config=config),capture_output=True,encoding='utf-8',timeout=60,creationflags=subprocess.CREATE_NO_WINDOW)
                 if response.returncode: raise SetupError('local_readback_failed_check_project_name_or_id')
                 result=json.loads(response.stdout)
             finally:
@@ -40,14 +40,14 @@ def main():
         elif args.command=='stop': result=request_stop(path)
         else:
             config,state,binary,node=validate(path)
-            env=child_environment(path,'')
+            env=child_environment(path,'',config=config)
             probe=subprocess.run([node,str(HERE/'probe.mjs'),str(path)],cwd=HERE,env=env,capture_output=True,text=True,timeout=60,creationflags=subprocess.CREATE_NO_WINDOW)
             if probe.returncode: raise SetupError('local_mcp_probe_failed_check_dependencies_and_projects')
             runtime_status=status(path)
             result={'local':json.loads(probe.stdout),'runtime':runtime_status,'remote':'not_checked'}
             if not args.local_only:
                 result['tunnel_readiness']=tunnel_readiness(state,runtime_status)
-                env=child_environment(path,credential(config))
+                env=child_environment(path,credential(config),config=config)
                 with tempfile.TemporaryDirectory(prefix='doctor-',dir=state) as scratch:
                     check_client(binary,profile(config,Path(scratch),node),env)
                 result['remote']='tunnel_doctor_passed_not_a_chatgpt_tool_test'

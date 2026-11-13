@@ -4,18 +4,7 @@ import os
 from pathlib import Path
 import sys
 import uuid
-from codex_desktop import AppTools
-
-
-def native_data(result):
-    if isinstance(result.get("structuredContent"), dict):
-        return result["structuredContent"]
-    for item in result.get("content", []):
-        if item.get("type") == "text":
-            data = json.loads(item["text"])
-            if isinstance(data, dict):
-                return data
-    raise ValueError("Unexpected native response")
+from codex_desktop import AppTools, desktop_server, native_data
 
 
 def start_chat(client, root, prompt_file, receipt):
@@ -52,8 +41,12 @@ def start_chat(client, root, prompt_file, receipt):
 
 
 if __name__ == "__main__":
-    node, server, context_thread, root, prompt_file, receipt = sys.argv[1:]
     try:
+        if len(sys.argv) == 6:
+            node, context_thread, root, prompt_file, receipt = sys.argv[1:]
+            server = desktop_server()
+        else:
+            node, server, context_thread, root, prompt_file, receipt = sys.argv[1:]
         client = AppTools(node, server, context_thread)
         try:
             start_chat(client, root, prompt_file, receipt)

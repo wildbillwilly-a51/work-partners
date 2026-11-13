@@ -1,6 +1,6 @@
 ---
 name: work-partners
-description: Consult a read-only Claude Code or Codex peer for user-requested collaboration on ideas, discussion, investigation or review, including an explicitly requested same-tool peer. Ordinary solo tasks stay solo.
+description: Consult a read-only Claude Code or Codex peer for requested collaboration, including an explicit same-tool peer. Ordinary solo tasks stay solo. Also sets up optional regular ChatGPT handoffs to local Codex on Windows, only when asked.
 ---
 
 # Work partners
@@ -215,3 +215,21 @@ or agreement is not validation. Do not present source-only peer agreement as
 validation of rendered UX, deployed behavior, or owner intent. Carry material
 review limitations and unresolved authorization questions into the reconciled
 report; resolve authority against the owner's actual instructions.
+
+## Optional: ChatGPT handoffs to Codex
+
+ChatGPT is never part of the default installation or of a peer consultation.
+Only when the user asks to set up or repair regular ChatGPT handoffs to the local Codex app,
+the receiving agent owns setup. On Windows, resolve the source checkout
+recorded in `~/.a51/work-partners/installation.json`. Use its launcher workflow
+in `codex-launcher/PORTABLE.md`, or `public/codex-launcher.md` in the development
+checkout. This applies from Codex and Claude
+Code. Resolve the checkout and run setup commands yourself. The user can sign
+in, create or copy a tunnel key, approve an account action, and paste the key
+into the launcher's masked local window. Never ask them to run a terminal
+command or send the key in chat. Never inspect the key dialog, clipboard, or
+local key entry field after the key is displayed or pasted.
+
+Use the launcher status to resume after an interruption. Verify the test using
+regular ChatGPT and the launcher's local Codex readback before reporting success.
+Keep ChatGPT handoff setup separate from a peer consultation.
